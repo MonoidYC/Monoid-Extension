@@ -4,39 +4,36 @@ import * as vscode from 'vscode';
 const DEFAULT_DASHBOARD_URL = 'https://monoid-dashboard.vercel.app';
 
 /**
- * Opens a webview panel (full editor tab) that embeds the Monoid dashboard
+ * Opens a webview panel (full editor tab) that embeds the Monoid test dashboard
  */
-export class GraphPanelManager {
+export class TestPanelManager {
   private static panel: vscode.WebviewPanel | undefined;
   private static currentVersionId: string | undefined;
 
   /**
-   * Opens or focuses the graph panel
+   * Opens or focuses the test panel
    */
   static openPanel(
     extensionUri: vscode.Uri,
-    workspaceSlug: string,
-    repoSlug: string,
     versionId?: string
   ): void {
     const config = vscode.workspace.getConfiguration('monoid-visualize');
     const dashboardUrl = config.get<string>('webAppUrl') || DEFAULT_DASHBOARD_URL;
-    const graphUrl = versionId ? `${dashboardUrl}/graph/${versionId}` : dashboardUrl;
+    const testUrl = versionId ? `${dashboardUrl}/tests/${versionId}` : dashboardUrl;
 
     // Log webview details
-    console.log('[Monoid WebView] Opening panel:');
+    console.log('[Monoid TestView] Opening panel:');
     console.log(`  Dashboard Base URL: ${dashboardUrl}`);
-    console.log(`  Full Graph URL: ${graphUrl}`);
+    console.log(`  Full Test URL: ${testUrl}`);
     console.log(`  Version ID: ${versionId || '(none)'}`);
-    console.log(`  Workspace: ${workspaceSlug}, Repo: ${repoSlug}`);
 
     // If panel exists and version changed, update the URL
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.One);
       if (versionId && versionId !== this.currentVersionId) {
-        console.log(`[Monoid WebView] Updating to new version: ${versionId}`);
+        console.log(`[Monoid TestView] Updating to new version: ${versionId}`);
         this.currentVersionId = versionId;
-        this.panel.webview.html = this.getWebviewContent(dashboardUrl, workspaceSlug, repoSlug, versionId);
+        this.panel.webview.html = this.getWebviewContent(dashboardUrl, versionId);
       }
       return;
     }
@@ -45,8 +42,8 @@ export class GraphPanelManager {
 
     // Create new panel
     this.panel = vscode.window.createWebviewPanel(
-      'monoid-visualize.graphPanel',
-      '🔮 Monoid Graph',
+      'monoid-visualize.testPanel',
+      '🧪 Monoid Tests',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -56,7 +53,7 @@ export class GraphPanelManager {
     );
 
     // Set the HTML content
-    this.panel.webview.html = this.getWebviewContent(dashboardUrl, workspaceSlug, repoSlug, versionId);
+    this.panel.webview.html = this.getWebviewContent(dashboardUrl, versionId);
 
     // Handle messages from the webview
     this.panel.webview.onDidReceiveMessage(async (message) => {
@@ -64,8 +61,14 @@ export class GraphPanelManager {
         case 'openFile':
           await this.openFile(message.filePath, message.line);
           break;
-        case 'refresh':
-          vscode.commands.executeCommand('monoid-visualize.visualizeAllCode');
+        case 'runTests':
+          vscode.commands.executeCommand('monoid-visualize.runAllTests', message.headed);
+          break;
+        case 'generateTests':
+          vscode.commands.executeCommand('monoid-visualize.generateAllTests');
+          break;
+        case 'deleteAllTests':
+          vscode.commands.executeCommand('monoid-visualize.deleteAllTests');
           break;
         case 'openExternal':
           if (message.url) {
@@ -92,7 +95,7 @@ export class GraphPanelManager {
     const dashboardUrl = config.get<string>('webAppUrl') || DEFAULT_DASHBOARD_URL;
     
     this.currentVersionId = versionId;
-    this.panel.webview.postMessage({ type: 'navigate', url: `${dashboardUrl}/graph/${versionId}` });
+    this.panel.webview.postMessage({ type: 'navigate', url: `${dashboardUrl}/tests/${versionId}` });
   }
 
   /**
@@ -111,6 +114,20 @@ export class GraphPanelManager {
     if (this.panel) {
       this.panel.webview.postMessage({ type: 'loading', message });
     }
+  }
+
+  /**
+   * Get the current version ID
+   */
+  static getCurrentVersionId(): string | undefined {
+    return this.currentVersionId;
+  }
+
+  /**
+   * Check if panel is open
+   */
+  static isOpen(): boolean {
+    return this.panel !== undefined;
   }
 
   /**
@@ -137,13 +154,11 @@ export class GraphPanelManager {
    */
   private static getWebviewContent(
     dashboardUrl: string,
-    workspaceSlug: string,
-    repoSlug: string,
     versionId?: string
   ): string {
-    // Build the graph URL - the dashboard uses /graph/[versionId] format
-    const graphUrl = versionId 
-      ? `${dashboardUrl}/graph/${versionId}`
+    // Build the test URL - the dashboard uses /tests/[versionId] format
+    const testUrl = versionId 
+      ? `${dashboardUrl}/tests/${versionId}`
       : `${dashboardUrl}`;
 
     return `<!DOCTYPE html>
@@ -152,7 +167,7 @@ export class GraphPanelManager {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${dashboardUrl} https://*.vercel.app https://*.supabase.co http://localhost:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
-  <title>Monoid Graph</title>
+  <title>Monoid Tests</title>
   <style>
     * {
       margin: 0;
@@ -203,9 +218,9 @@ export class GraphPanelManager {
       content: '';
       width: 8px;
       height: 8px;
-      background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+      background: linear-gradient(135deg, #34d399, #10b981);
       border-radius: 50%;
-      box-shadow: 0 0 8px rgba(167, 139, 250, 0.5);
+      box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
     }
     
     .toolbar-info {
@@ -238,17 +253,100 @@ export class GraphPanelManager {
     
     .btn:hover {
       background: rgba(255, 255, 255, 0.08);
-      border-color: rgba(167, 139, 250, 0.3);
+      border-color: rgba(52, 211, 153, 0.3);
     }
     
     .btn-primary {
-      background: linear-gradient(135deg, rgba(167, 139, 250, 0.2), rgba(139, 92, 246, 0.2));
-      border-color: rgba(167, 139, 250, 0.3);
+      background: linear-gradient(135deg, rgba(52, 211, 153, 0.2), rgba(16, 185, 129, 0.2));
+      border-color: rgba(52, 211, 153, 0.3);
     }
     
     .btn-primary:hover {
-      background: linear-gradient(135deg, rgba(167, 139, 250, 0.3), rgba(139, 92, 246, 0.3));
-      border-color: rgba(167, 139, 250, 0.5);
+      background: linear-gradient(135deg, rgba(52, 211, 153, 0.3), rgba(16, 185, 129, 0.3));
+      border-color: rgba(52, 211, 153, 0.5);
+    }
+    
+    .btn-run {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(37, 99, 235, 0.2));
+      border-color: rgba(59, 130, 246, 0.3);
+    }
+    
+    .btn-run:hover {
+      background: linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(37, 99, 235, 0.3));
+      border-color: rgba(59, 130, 246, 0.5);
+    }
+    
+    .btn-danger {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.2));
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    
+    .btn-danger:hover {
+      background: linear-gradient(135deg, rgba(239, 68, 68, 0.3), rgba(220, 38, 38, 0.3));
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+    
+    .run-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    
+    .toggle-container:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    
+    .toggle-label {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 11px;
+      color: #9ca3af;
+      user-select: none;
+    }
+    
+    .toggle-switch {
+      position: relative;
+      width: 32px;
+      height: 18px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 9px;
+      transition: all 0.2s ease;
+    }
+    
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      background: #6b7280;
+      border-radius: 50%;
+      transition: all 0.2s ease;
+    }
+    
+    .toggle-container.active .toggle-switch {
+      background: rgba(59, 130, 246, 0.3);
+    }
+    
+    .toggle-container.active .toggle-switch::after {
+      left: 16px;
+      background: #3b82f6;
+    }
+    
+    .toggle-container.active .toggle-label {
+      color: #3b82f6;
     }
     
     .iframe-container {
@@ -287,7 +385,7 @@ export class GraphPanelManager {
       width: 40px;
       height: 40px;
       border: 3px solid rgba(255, 255, 255, 0.1);
-      border-top-color: #a78bfa;
+      border-top-color: #34d399;
       border-radius: 50%;
       animation: spin 1s linear infinite;
     }
@@ -352,39 +450,46 @@ export class GraphPanelManager {
   <div class="container">
     <div class="toolbar">
       <div class="toolbar-left">
-        <span class="toolbar-title">Monoid Graph</span>
-        <span class="toolbar-info">${workspaceSlug}/${repoSlug}</span>
-        ${versionId ? `<span class="toolbar-info" style="color: #a78bfa;">${versionId.slice(0, 8)}...</span>` : ''}
+        <span class="toolbar-title">Monoid Tests</span>
+        ${versionId ? `<span class="toolbar-info" style="color: #34d399;">${versionId.slice(0, 8)}...</span>` : ''}
       </div>
       <div class="toolbar-actions">
-        <button class="btn btn-primary" id="refreshBtn" title="Re-analyze and refresh">↻ Analyze</button>
+        <button class="btn btn-primary" id="generateBtn" title="Generate tests for the app">✨ Generate</button>
+        <div class="run-group">
+          <button class="btn btn-run" id="runBtn" title="Run all tests">▶ Run Tests</button>
+          <div class="toggle-container active" id="headedToggle" title="Toggle headed/headless mode">
+            <span class="toggle-label">Headed</span>
+            <div class="toggle-switch"></div>
+          </div>
+        </div>
         <button class="btn" id="reloadBtn" title="Reload dashboard">⟳ Reload</button>
         <button class="btn" id="openExternalBtn" title="Open in browser">↗ External</button>
+        ${versionId ? '<button class="btn btn-danger" id="deleteAllBtn" title="Delete all tests for this version">🗑 Delete All</button>' : ''}
       </div>
     </div>
     
     <div class="iframe-container">
       ${versionId ? `
       <iframe 
-        id="graphFrame" 
-        src="${graphUrl}"
+        id="testFrame" 
+        src="${testUrl}"
         allow="clipboard-read; clipboard-write"
       ></iframe>
       ` : ''}
       
       <div class="loading-overlay ${versionId ? 'visible' : ''}" id="loading">
         <div class="loading-spinner"></div>
-        <div class="loading-text" id="loadingText">Loading graph...</div>
+        <div class="loading-text" id="loadingText">Loading tests...</div>
       </div>
 
       <div class="empty-state ${!versionId ? 'visible' : ''}" id="emptyState">
-        <div class="empty-icon">🔮</div>
-        <div class="empty-title">No Graph Yet</div>
+        <div class="empty-icon">🧪</div>
+        <div class="empty-title">No Tests Yet</div>
         <div class="empty-desc">
-          Run "Visualize All Code" to analyze your codebase and generate a graph visualization.
+          Run "Generate All Tests" to automatically create E2E tests for your application using Playwright.
         </div>
-        <button class="btn btn-primary" id="analyzeBtn">
-          ✨ Visualize All Code
+        <button class="btn btn-primary" id="generateAllBtn">
+          ✨ Generate All Tests
         </button>
       </div>
     </div>
@@ -392,12 +497,12 @@ export class GraphPanelManager {
   
   <script>
     const vscode = acquireVsCodeApi();
-    const iframe = document.getElementById('graphFrame');
+    const iframe = document.getElementById('testFrame');
     const loadingEl = document.getElementById('loading');
     const loadingText = document.getElementById('loadingText');
     const emptyState = document.getElementById('emptyState');
     
-    const graphUrl = '${graphUrl}';
+    const testUrl = '${testUrl}';
     const dashboardUrl = '${dashboardUrl}';
     const hasVersion = ${versionId ? 'true' : 'false'};
     
@@ -418,31 +523,52 @@ export class GraphPanelManager {
       }, 5000);
     }
     
+    // Headed mode toggle state
+    let headedMode = true;
+    const headedToggle = document.getElementById('headedToggle');
+    const toggleLabel = headedToggle.querySelector('.toggle-label');
+    
+    headedToggle.addEventListener('click', () => {
+      headedMode = !headedMode;
+      if (headedMode) {
+        headedToggle.classList.add('active');
+        toggleLabel.textContent = 'Headed';
+      } else {
+        headedToggle.classList.remove('active');
+        toggleLabel.textContent = 'Headless';
+      }
+    });
+    
     // Toolbar buttons
-    document.getElementById('refreshBtn').addEventListener('click', () => {
-      loadingEl.classList.add('visible');
-      loadingText.textContent = 'Analyzing codebase...';
-      emptyState.classList.remove('visible');
-      vscode.postMessage({ type: 'refresh' });
+    document.getElementById('generateBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'generateTests' });
+    });
+    
+    document.getElementById('runBtn').addEventListener('click', () => {
+      vscode.postMessage({ type: 'runTests', headed: headedMode });
     });
     
     document.getElementById('reloadBtn')?.addEventListener('click', () => {
       if (iframe) {
         loadingEl.classList.add('visible');
         loadingText.textContent = 'Reloading...';
-        iframe.src = graphUrl;
+        iframe.src = testUrl;
       }
     });
     
     document.getElementById('openExternalBtn').addEventListener('click', () => {
-      vscode.postMessage({ type: 'openExternal', url: graphUrl });
+      vscode.postMessage({ type: 'openExternal', url: testUrl });
     });
 
-    document.getElementById('analyzeBtn')?.addEventListener('click', () => {
+    document.getElementById('generateAllBtn')?.addEventListener('click', () => {
       loadingEl.classList.add('visible');
-      loadingText.textContent = 'Analyzing codebase...';
+      loadingText.textContent = 'Generating tests...';
       emptyState.classList.remove('visible');
-      vscode.postMessage({ type: 'refresh' });
+      vscode.postMessage({ type: 'generateTests' });
+    });
+
+    document.getElementById('deleteAllBtn')?.addEventListener('click', () => {
+      vscode.postMessage({ type: 'deleteAllTests' });
     });
     
     // Listen for messages from the embedded dashboard
@@ -457,7 +583,7 @@ export class GraphPanelManager {
       } else if (data.type === 'navigate') {
         if (iframe) {
           loadingEl.classList.add('visible');
-          loadingText.textContent = 'Loading new version...';
+          loadingText.textContent = 'Loading tests...';
           iframe.src = data.url;
           emptyState.classList.remove('visible');
         }
@@ -481,91 +607,5 @@ export class GraphPanelManager {
   </script>
 </body>
 </html>`;
-  }
-}
-
-// Legacy provider for backward compatibility (sidebar view)
-export class GraphViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'monoid-visualize.graphView';
-  
-  private _view?: vscode.WebviewView;
-
-  constructor(private readonly _extensionUri: vscode.Uri) {}
-
-  public resolveWebviewView(
-    webviewView: vscode.WebviewView,
-    _context: vscode.WebviewViewResolveContext,
-    _token: vscode.CancellationToken
-  ) {
-    this._view = webviewView;
-
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this._extensionUri]
-    };
-
-    // Show a simple message directing to use the panel
-    webviewView.webview.html = `<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      padding: 20px;
-      color: #e5e5e5;
-      background: #08080a;
-    }
-    .icon { font-size: 32px; margin-bottom: 16px; }
-    h3 { margin-bottom: 8px; font-size: 14px; }
-    p { color: #6b7280; font-size: 12px; line-height: 1.5; }
-    button {
-      margin-top: 16px;
-      padding: 10px 16px;
-      background: linear-gradient(135deg, rgba(167, 139, 250, 0.2), rgba(139, 92, 246, 0.2));
-      color: #e5e5e5;
-      border: 1px solid rgba(167, 139, 250, 0.3);
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 500;
-      transition: all 0.15s ease;
-    }
-    button:hover { 
-      background: linear-gradient(135deg, rgba(167, 139, 250, 0.3), rgba(139, 92, 246, 0.3));
-      border-color: rgba(167, 139, 250, 0.5);
-    }
-  </style>
-</head>
-<body>
-  <div class="icon">🔮</div>
-  <h3>Monoid Graph</h3>
-  <p>Click below to open the full graph visualization in a new tab.</p>
-  <button onclick="openPanel()">Open Graph Panel</button>
-  <script>
-    const vscode = acquireVsCodeApi();
-    function openPanel() {
-      vscode.postMessage({ type: 'openPanel' });
-    }
-  </script>
-</body>
-</html>`;
-
-    webviewView.webview.onDidReceiveMessage(message => {
-      if (message.type === 'openPanel') {
-        vscode.commands.executeCommand('monoid-visualize.openGraphPanel');
-      }
-    });
-  }
-
-  public updateGraph(_data: any) {
-    // No-op for sidebar, use panel instead
-  }
-
-  public showLoading(_message: string) {
-    // No-op for sidebar
-  }
-
-  public showError(_message: string) {
-    // No-op for sidebar
   }
 }

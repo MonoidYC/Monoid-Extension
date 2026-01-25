@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { LocalNode, LocalEdge, CodeNode, CodeEdge, Workspace, Repo, RepoVersion, GraphData, GraphNode, GraphEdge } from '../types';
+import { LocalTestNode, LocalTestCoverageEdge, TestNode, TestStatusUpdate } from '../testing/types';
 import * as path from 'path';
 
 // Default values - can be overridden via settings
@@ -58,29 +59,78 @@ export class SupabaseService {
     return created as Workspace;
   }
 
-  async getOrCreateRepo(workspaceId: string, repoName: string): Promise<Repo> {
+  async getOrCreateOrganization(orgName: string, slug?: string, avatarUrl?: string): Promise<{ id: string; name: string; slug: string }> {
     const client = this.getClient();
+    const orgSlug = slug || orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     
-    // Try to get existing repo
+    // Try to get existing organization
+    const { data: existing, error: fetchError } = await client
+      .from('organizations')
+      .select('*')
+      .eq('slug', orgSlug)
+      .single();
+
+    if (existing && !fetchError) {
+      return existing as { id: string; name: string; slug: string };
+    }
+
+    // Create new organization
+    const { data: created, error: createError } = await client
+      .from('organizations')
+      .insert({ 
+        name: orgName, 
+        slug: orgSlug,
+        avatar_url: avatarUrl || null
+      })
+      .select()
+      .single();
+
+    if (createError) {
+      throw new Error(`Failed to create organization: ${createError.message}`);
+    }
+
+    console.log(`[Supabase] Created organization: ${orgName} (${orgSlug})`);
+    return created as { id: string; name: string; slug: string };
+  }
+
+  async getOrCreateRepo(workspaceId: string, repoName: string, owner?: string, organizationId?: string): Promise<Repo> {
+    const client = this.getClient();
+    const repoOwner = owner || 'local';
+    
+    // Try to get existing repo by owner/name combination
     const { data: existing, error: fetchError } = await client
       .from('repos')
       .select('*')
       .eq('workspace_id', workspaceId)
       .eq('name', repoName)
+      .eq('owner', repoOwner)
       .single();
 
     if (existing && !fetchError) {
+      // If organization_id is provided and repo doesn't have one, update it
+      if (organizationId && !(existing as any).organization_id) {
+        await client
+          .from('repos')
+          .update({ organization_id: organizationId })
+          .eq('id', existing.id);
+      }
       return existing as Repo;
     }
 
     // Create new repo
+    const insertData: any = { 
+      workspace_id: workspaceId, 
+      name: repoName,
+      owner: repoOwner
+    };
+    
+    if (organizationId) {
+      insertData.organization_id = organizationId;
+    }
+
     const { data: created, error: createError } = await client
       .from('repos')
-      .insert({ 
-        workspace_id: workspaceId, 
-        name: repoName,
-        owner: 'local' // For local workspaces
-      })
+      .insert(insertData)
       .select()
       .single();
 
@@ -88,6 +138,7 @@ export class SupabaseService {
       throw new Error(`Failed to create repo: ${createError.message}`);
     }
 
+    console.log(`[Supabase] Created repo: ${repoOwner}/${repoName} (org: ${organizationId || 'none'})`);
     return created as Repo;
   }
 
@@ -132,7 +183,8 @@ export class SupabaseService {
         end_column: node.end_column,
         snippet: node.snippet?.substring(0, 1000), // Limit snippet size
         signature: node.signature,
-        metadata: node.metadata || {}
+        metadata: node.metadata || {},
+        github_link: node.github_link
       }));
 
       const { data, error } = await client
@@ -247,7 +299,7 @@ export class SupabaseService {
     // Fetch nodes
     const { data: nodesData, error: nodesError } = await client
       .from('code_nodes')
-      .select('id, stable_id, name, node_type, file_path, start_line')
+      .select('id, stable_id, name, node_type, file_path, start_line, github_link')
       .eq('version_id', versionId);
 
     if (nodesError) {
@@ -269,7 +321,8 @@ export class SupabaseService {
       label: node.name,
       type: node.node_type,
       filePath: node.file_path,
-      line: node.start_line
+      line: node.start_line,
+      githubLink: node.github_link
     }));
 
     const edges: GraphEdge[] = (edgesData || []).map(edge => ({
@@ -321,5 +374,410 @@ export class SupabaseService {
     }
 
     return results;
+  }
+
+  // ==================== Test Node Methods ====================
+
+  /**
+   * Save test nodes to Supabase (upsert to handle regeneration)
+   * Returns a map of stable_id -> database id
+   */
+  async saveTestNodes(versionId: string, tests: LocalTestNode[]): Promise<Map<string, string>> {
+    const client = this.getClient();
+    const stableIdToId = new Map<string, string>();
+
+    // Upsert tests in batches
+    const batchSize = 50;
+    for (let i = 0; i < tests.length; i += batchSize) {
+      const batch = tests.slice(i, i + batchSize).map(test => ({
+        version_id: versionId,
+        stable_id: test.stable_id,
+        name: test.name,
+        description: test.description,
+        test_type: test.test_type,
+        source_type: test.source_type,
+        file_path: test.file_path,
+        start_line: test.start_line,
+        end_line: test.end_line,
+        runner: test.runner,
+        command: test.command,
+        last_status: 'pending',
+        metadata: test.metadata || {}
+      }));
+
+      const { data, error } = await client
+        .from('test_nodes')
+        .upsert(batch, { 
+          onConflict: 'version_id,stable_id',
+          ignoreDuplicates: false 
+        })
+        .select('id, stable_id');
+
+      if (error) {
+        throw new Error(`Failed to save test nodes: ${error.message}`);
+      }
+
+      // Build stable_id to id mapping
+      data?.forEach((row: { id: string; stable_id: string }) => {
+        stableIdToId.set(row.stable_id, row.id);
+      });
+    }
+
+    return stableIdToId;
+  }
+
+  /**
+   * Save or update a single test node (upsert by stable_id)
+   */
+  async saveOrUpdateTestNode(versionId: string, test: LocalTestNode): Promise<string> {
+    const client = this.getClient();
+
+    // Check if test already exists for this version
+    const { data: existing } = await client
+      .from('test_nodes')
+      .select('id')
+      .eq('version_id', versionId)
+      .eq('stable_id', test.stable_id)
+      .single();
+
+    if (existing) {
+      // Update existing test
+      const { error } = await client
+        .from('test_nodes')
+        .update({
+          name: test.name,
+          description: test.description,
+          file_path: test.file_path,
+          start_line: test.start_line,
+          end_line: test.end_line,
+          command: test.command,
+          metadata: test.metadata || {}
+        })
+        .eq('id', existing.id);
+
+      if (error) {
+        throw new Error(`Failed to update test node: ${error.message}`);
+      }
+
+      return existing.id;
+    }
+
+    // Insert new test
+    const { data, error } = await client
+      .from('test_nodes')
+      .insert({
+        version_id: versionId,
+        stable_id: test.stable_id,
+        name: test.name,
+        description: test.description,
+        test_type: test.test_type,
+        source_type: test.source_type,
+        file_path: test.file_path,
+        start_line: test.start_line,
+        end_line: test.end_line,
+        runner: test.runner,
+        command: test.command,
+        last_status: 'pending',
+        metadata: test.metadata || {}
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to save test node: ${error.message}`);
+    }
+
+    return data.id;
+  }
+
+  /**
+   * Get all test nodes for a version
+   */
+  async getTestNodes(versionId: string): Promise<TestNode[]> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('test_nodes')
+      .select('*')
+      .eq('version_id', versionId)
+      .order('file_path', { ascending: true });
+
+    if (error) {
+      throw new Error(`Failed to fetch test nodes: ${error.message}`);
+    }
+
+    return (data || []) as TestNode[];
+  }
+
+  /**
+   * Get a single test node by ID
+   */
+  async getTestNode(testNodeId: string): Promise<TestNode | null> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('test_nodes')
+      .select('*')
+      .eq('id', testNodeId)
+      .single();
+
+    if (error) {
+      return null;
+    }
+
+    return data as TestNode;
+  }
+
+  /**
+   * Get a test node by stable_id within a version
+   */
+  async getTestNodeByStableId(versionId: string, stableId: string): Promise<TestNode | null> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('test_nodes')
+      .select('*')
+      .eq('version_id', versionId)
+      .eq('stable_id', stableId)
+      .single();
+
+    if (error) {
+      return null;
+    }
+
+    return data as TestNode;
+  }
+
+  /**
+   * Update test status after execution
+   */
+  async updateTestStatus(testNodeId: string, status: TestStatusUpdate): Promise<void> {
+    const client = this.getClient();
+
+    const { error } = await client
+      .from('test_nodes')
+      .update(status)
+      .eq('id', testNodeId);
+
+    if (error) {
+      throw new Error(`Failed to update test status: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delete a test node
+   */
+  async deleteTestNode(testNodeId: string): Promise<void> {
+    const client = this.getClient();
+
+    // First delete coverage edges
+    await client
+      .from('test_coverage_edges')
+      .delete()
+      .eq('test_node_id', testNodeId);
+
+    // Then delete the test node
+    const { error } = await client
+      .from('test_nodes')
+      .delete()
+      .eq('id', testNodeId);
+
+    if (error) {
+      throw new Error(`Failed to delete test node: ${error.message}`);
+    }
+  }
+
+  /**
+   * Delete all test nodes for a version
+   */
+  async deleteAllTestsForVersion(versionId: string): Promise<{ deleted: number }> {
+    const client = this.getClient();
+
+    // First get all test node IDs for this version
+    const { data: testNodes, error: fetchError } = await client
+      .from('test_nodes')
+      .select('id')
+      .eq('version_id', versionId);
+
+    if (fetchError) {
+      throw new Error(`Failed to fetch test nodes: ${fetchError.message}`);
+    }
+
+    if (!testNodes || testNodes.length === 0) {
+      return { deleted: 0 };
+    }
+
+    const testNodeIds = testNodes.map(t => t.id);
+
+    // Delete all coverage edges for these test nodes
+    const { error: edgeError } = await client
+      .from('test_coverage_edges')
+      .delete()
+      .in('test_node_id', testNodeIds);
+
+    if (edgeError) {
+      console.error(`Warning: Failed to delete test coverage edges: ${edgeError.message}`);
+    }
+
+    // Delete all test nodes for this version
+    const { error: deleteError } = await client
+      .from('test_nodes')
+      .delete()
+      .eq('version_id', versionId);
+
+    if (deleteError) {
+      throw new Error(`Failed to delete test nodes: ${deleteError.message}`);
+    }
+
+    return { deleted: testNodes.length };
+  }
+
+  // ==================== Test Coverage Edge Methods ====================
+
+  /**
+   * Save test coverage edges linking tests to code nodes
+   */
+  async saveTestCoverageEdges(
+    versionId: string,
+    edges: LocalTestCoverageEdge[],
+    testIdMap: Map<string, string>,
+    codeIdMap: Map<string, string>
+  ): Promise<void> {
+    const client = this.getClient();
+
+    // Filter edges to only include those where both test and code nodes exist
+    const validEdges = edges.filter(edge =>
+      testIdMap.has(edge.test_stable_id) && codeIdMap.has(edge.code_stable_id)
+    );
+
+    if (validEdges.length === 0) {
+      return;
+    }
+
+    // Deduplicate edges
+    const edgeMap = new Map<string, {
+      test_node_id: string;
+      code_node_id: string;
+      coverage_type: string;
+      metadata: Record<string, unknown>;
+    }>();
+
+    for (const edge of validEdges) {
+      const testId = testIdMap.get(edge.test_stable_id)!;
+      const codeId = codeIdMap.get(edge.code_stable_id)!;
+      const key = `${testId}:${codeId}:${edge.coverage_type}`;
+
+      if (!edgeMap.has(key)) {
+        edgeMap.set(key, {
+          test_node_id: testId,
+          code_node_id: codeId,
+          coverage_type: edge.coverage_type,
+          metadata: edge.metadata || {}
+        });
+      }
+    }
+
+    const uniqueEdges = Array.from(edgeMap.values());
+
+    // Upsert edges in batches (to handle regeneration)
+    const batchSize = 100;
+    for (let i = 0; i < uniqueEdges.length; i += batchSize) {
+      const batch = uniqueEdges.slice(i, i + batchSize).map(edge => ({
+        version_id: versionId,
+        ...edge
+      }));
+
+      const { error } = await client
+        .from('test_coverage_edges')
+        .upsert(batch, {
+          onConflict: 'test_node_id,code_node_id',
+          ignoreDuplicates: false
+        });
+
+      if (error) {
+        throw new Error(`Failed to save test coverage edges: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Add a single coverage edge
+   */
+  async addTestCoverageEdge(
+    versionId: string,
+    testNodeId: string,
+    codeNodeId: string,
+    coverageType: string
+  ): Promise<void> {
+    const client = this.getClient();
+
+    // Check if edge already exists
+    const { data: existing } = await client
+      .from('test_coverage_edges')
+      .select('id')
+      .eq('version_id', versionId)
+      .eq('test_node_id', testNodeId)
+      .eq('code_node_id', codeNodeId)
+      .eq('coverage_type', coverageType)
+      .single();
+
+    if (existing) {
+      return; // Edge already exists
+    }
+
+    const { error } = await client
+      .from('test_coverage_edges')
+      .insert({
+        version_id: versionId,
+        test_node_id: testNodeId,
+        code_node_id: codeNodeId,
+        coverage_type: coverageType,
+        metadata: {}
+      });
+
+    if (error) {
+      throw new Error(`Failed to add test coverage edge: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get coverage edges for a test node
+   */
+  async getTestCoverageEdges(testNodeId: string): Promise<{ code_node_id: string; coverage_type: string }[]> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('test_coverage_edges')
+      .select('code_node_id, coverage_type')
+      .eq('test_node_id', testNodeId);
+
+    if (error) {
+      throw new Error(`Failed to fetch test coverage edges: ${error.message}`);
+    }
+
+    return data || [];
+  }
+
+  /**
+   * Get code nodes stable_id to id mapping for a version
+   */
+  async getCodeNodeIdMap(versionId: string): Promise<Map<string, string>> {
+    const client = this.getClient();
+    const stableIdToId = new Map<string, string>();
+
+    const { data, error } = await client
+      .from('code_nodes')
+      .select('id, stable_id')
+      .eq('version_id', versionId);
+
+    if (error) {
+      throw new Error(`Failed to fetch code nodes: ${error.message}`);
+    }
+
+    data?.forEach((row: { id: string; stable_id: string }) => {
+      stableIdToId.set(row.stable_id, row.id);
+    });
+
+    return stableIdToId;
   }
 }

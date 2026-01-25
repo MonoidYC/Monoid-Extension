@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { LocalNode, LocalEdge, AnalysisResult, NodeType, EdgeType } from '../types';
+import { LocalNode, LocalEdge, AnalysisResult, NodeType, EdgeType, GitHubInfo } from '../types';
 import { LLMAnalyzer } from './llmAnalyzer';
 
 /**
@@ -26,6 +26,7 @@ export class CodeAnalyzer {
   private edges: LocalEdge[] = [];
   private progress?: vscode.Progress<{ message?: string; increment?: number }>;
   private outputChannel: vscode.OutputChannel;
+  private githubInfo?: GitHubInfo;
 
   // Stats for debugging
   private stats = {
@@ -42,13 +43,29 @@ export class CodeAnalyzer {
     this.outputChannel = vscode.window.createOutputChannel('Monoid Visualize');
   }
 
+  /**
+   * Generate a GitHub permalink for a code location
+   */
+  private generateGitHubLink(filePath: string, startLine: number, endLine: number): string | undefined {
+    if (!this.githubInfo) { return undefined; }
+    
+    const { owner, repo, branch } = this.githubInfo;
+    const lineRange = startLine === endLine 
+      ? `L${startLine}` 
+      : `L${startLine}-L${endLine}`;
+    
+    return `https://github.com/${owner}/${repo}/blob/${branch}/${filePath}#${lineRange}`;
+  }
+
   async analyzeWorkspace(
     workspaceFolder: vscode.WorkspaceFolder,
-    progress?: vscode.Progress<{ message?: string; increment?: number }>
+    progress?: vscode.Progress<{ message?: string; increment?: number }>,
+    githubInfo?: GitHubInfo
   ): Promise<AnalysisResult> {
     this.nodes.clear();
     this.edges = [];
     this.progress = progress;
+    this.githubInfo = githubInfo;
     this.stats = {
       filesAnalyzed: 0,
       componentsFound: 0,
@@ -62,6 +79,9 @@ export class CodeAnalyzer {
     this.log('='.repeat(60));
     this.log('Starting code analysis...');
     this.log(`Workspace: ${workspaceFolder.name}`);
+    if (githubInfo) {
+      this.log(`GitHub: ${githubInfo.owner}/${githubInfo.repo} (${githubInfo.branch})`);
+    }
     this.log('='.repeat(60));
 
     // Find all relevant files (exclude common non-source directories)
@@ -708,6 +728,10 @@ export class CodeAnalyzer {
 
   private addNode(node: LocalNode): void {
     if (!this.nodes.has(node.stable_id)) {
+      // Add GitHub link if we have GitHub info configured
+      if (!node.github_link && this.githubInfo) {
+        node.github_link = this.generateGitHubLink(node.file_path, node.start_line, node.end_line);
+      }
       this.nodes.set(node.stable_id, node);
     }
   }

@@ -46,6 +46,7 @@ export interface CodeNode {
   snippet?: string;
   signature?: string;
   metadata?: Record<string, unknown>;
+  github_link?: string;
 }
 
 export interface CodeEdge {
@@ -87,6 +88,13 @@ export interface RepoVersion {
   edge_count?: number;
 }
 
+// GitHub repository info for generating links
+export interface GitHubInfo {
+  owner: string;
+  repo: string;
+  branch: string;
+}
+
 // For local analysis before saving to Supabase
 export interface LocalNode {
   stable_id: string;
@@ -102,6 +110,7 @@ export interface LocalNode {
   snippet?: string;
   signature?: string;
   metadata?: Record<string, unknown>;
+  github_link?: string;
 }
 
 export interface LocalEdge {
@@ -124,6 +133,7 @@ export interface GraphNode {
   type: NodeType;
   filePath: string;
   line: number;
+  githubLink?: string;
   x?: number;
   y?: number;
 }

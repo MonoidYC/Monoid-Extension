@@ -1,17 +1,440 @@
 import * as vscode from 'vscode';
-import { GraphData, GraphNode, GraphEdge, NodeType } from '../types';
 
+/**
+ * Opens a webview panel (full editor tab) that embeds the Monoid web app
+ */
+export class GraphPanelManager {
+  private static panel: vscode.WebviewPanel | undefined;
+
+  /**
+   * Opens or focuses the graph panel
+   */
+  static openPanel(
+    extensionUri: vscode.Uri,
+    workspaceSlug: string,
+    repoSlug: string,
+    versionId?: string
+  ): void {
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    const webAppUrl = config.get<string>('webAppUrl') || 'http://localhost:3000';
+
+    // If panel exists, just reveal it
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.One);
+      this.updatePanelUrl(webAppUrl, workspaceSlug, repoSlug, versionId);
+      return;
+    }
+
+    // Create new panel
+    this.panel = vscode.window.createWebviewPanel(
+      'monoid-visualize.graphPanel',
+      '🔮 Monoid Graph',
+      vscode.ViewColumn.One,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true, // Keep the iframe loaded when switching tabs
+        localResourceRoots: [extensionUri]
+      }
+    );
+
+    // Set the HTML content
+    this.panel.webview.html = this.getWebviewContent(webAppUrl, workspaceSlug, repoSlug, versionId);
+
+    // Handle messages from the webview
+    this.panel.webview.onDidReceiveMessage(async (message) => {
+      switch (message.type) {
+        case 'openFile':
+          await this.openFile(message.filePath, message.line);
+          break;
+        case 'refresh':
+          vscode.commands.executeCommand('monoid-visualize.visualizeAllCode');
+          break;
+      }
+    });
+
+    // Clean up when panel is closed
+    this.panel.onDidDispose(() => {
+      this.panel = undefined;
+    });
+  }
+
+  /**
+   * Update the panel's URL (e.g., after a new visualization)
+   */
+  static updatePanelUrl(
+    webAppUrl: string,
+    workspaceSlug: string,
+    repoSlug: string,
+    versionId?: string
+  ): void {
+    if (!this.panel) { return; }
+    this.panel.webview.html = this.getWebviewContent(webAppUrl, workspaceSlug, repoSlug, versionId);
+  }
+
+  /**
+   * Send a message to refresh the embedded app
+   */
+  static refreshPanel(): void {
+    if (this.panel) {
+      this.panel.webview.postMessage({ type: 'refresh' });
+    }
+  }
+
+  /**
+   * Show loading state
+   */
+  static showLoading(message: string): void {
+    if (this.panel) {
+      this.panel.webview.postMessage({ type: 'loading', message });
+    }
+  }
+
+  /**
+   * Open a file in the editor
+   */
+  private static async openFile(filePath: string, line: number): Promise<void> {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) { return; }
+
+    try {
+      const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+      const doc = await vscode.workspace.openTextDocument(fileUri);
+      const editor = await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+      const position = new vscode.Position(Math.max(0, line - 1), 0);
+      editor.selection = new vscode.Selection(position, position);
+      editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+    } catch (err) {
+      console.error('Could not open file:', err);
+    }
+  }
+
+  /**
+   * Generate the webview HTML with embedded iframe
+   */
+  private static getWebviewContent(
+    webAppUrl: string,
+    workspaceSlug: string,
+    repoSlug: string,
+    versionId?: string
+  ): string {
+    // Build the URL with query params
+    const params = new URLSearchParams({
+      workspace: workspaceSlug,
+      repo: repoSlug,
+      embedded: 'true', // Tell the web app it's embedded in VS Code
+      ...(versionId && { version: versionId })
+    });
+    
+    const embedUrl = `${webAppUrl}/graph?${params.toString()}`;
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${webAppUrl} http://localhost:* https://*.vercel.app https://*.monoid.so; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <title>Monoid Graph</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0d1117;
+    }
+    
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    
+    .toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .toolbar-title {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      color: #c9d1d9;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .toolbar-title::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      background: #58a6ff;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #58a6ff;
+    }
+    
+    .toolbar-info {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      color: #8b949e;
+      padding: 4px 8px;
+      background: #21262d;
+      border-radius: 4px;
+    }
+    
+    .toolbar-actions {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .btn {
+      padding: 6px 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: #c9d1d9;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    
+    .btn:hover {
+      background: #30363d;
+      border-color: #58a6ff;
+    }
+    
+    .btn-primary {
+      background: #238636;
+      border-color: #238636;
+    }
+    
+    .btn-primary:hover {
+      background: #2ea043;
+      border-color: #2ea043;
+    }
+    
+    .iframe-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #0d1117;
+    }
+    
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(13, 17, 23, 0.95);
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    
+    .loading-overlay.visible {
+      opacity: 1;
+      pointer-events: all;
+    }
+    
+    .loading-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #30363d;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .loading-text {
+      margin-top: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      color: #8b949e;
+    }
+
+    .error-banner {
+      display: none;
+      padding: 12px 16px;
+      background: #21262d;
+      border-bottom: 1px solid #f8514966;
+      color: #f85149;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 12px;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .error-banner.visible {
+      display: flex;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-title">Monoid Graph</span>
+        <span class="toolbar-info">${workspaceSlug}/${repoSlug}</span>
+      </div>
+      <div class="toolbar-actions">
+        <button class="btn" id="refreshBtn" title="Refresh graph data">↻ Refresh</button>
+        <button class="btn" id="reloadBtn" title="Reload web app">⟳ Reload</button>
+        <button class="btn" id="openExternalBtn" title="Open in browser">↗ Open External</button>
+      </div>
+    </div>
+    
+    <div class="error-banner" id="errorBanner">
+      <span>⚠️</span>
+      <span id="errorText">Could not connect to web app</span>
+    </div>
+    
+    <div class="iframe-container">
+      <iframe 
+        id="graphFrame" 
+        src="${embedUrl}"
+        allow="clipboard-read; clipboard-write"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+      ></iframe>
+      
+      <div class="loading-overlay" id="loading">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loadingText">Loading graph...</div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const vscode = acquireVsCodeApi();
+    const iframe = document.getElementById('graphFrame');
+    const loadingEl = document.getElementById('loading');
+    const loadingText = document.getElementById('loadingText');
+    const errorBanner = document.getElementById('errorBanner');
+    const errorText = document.getElementById('errorText');
+    
+    const embedUrl = '${embedUrl}';
+    const webAppUrl = '${webAppUrl}';
+    
+    // Show loading initially
+    loadingEl.classList.add('visible');
+    
+    // Hide loading when iframe loads
+    iframe.addEventListener('load', () => {
+      loadingEl.classList.remove('visible');
+      errorBanner.classList.remove('visible');
+    });
+    
+    // Handle iframe errors
+    iframe.addEventListener('error', () => {
+      loadingEl.classList.remove('visible');
+      errorBanner.classList.add('visible');
+      errorText.textContent = 'Could not connect to ' + webAppUrl;
+    });
+    
+    // Toolbar buttons
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      loadingEl.classList.add('visible');
+      loadingText.textContent = 'Refreshing graph...';
+      vscode.postMessage({ type: 'refresh' });
+    });
+    
+    document.getElementById('reloadBtn').addEventListener('click', () => {
+      loadingEl.classList.add('visible');
+      loadingText.textContent = 'Reloading...';
+      iframe.src = embedUrl;
+    });
+    
+    document.getElementById('openExternalBtn').addEventListener('click', () => {
+      // Open URL in default browser - the embedded app should handle this
+      window.open(embedUrl.replace('embedded=true', 'embedded=false'), '_blank');
+    });
+    
+    // Listen for messages from the embedded web app
+    window.addEventListener('message', (event) => {
+      // Only accept messages from our web app origin
+      if (!event.origin.startsWith(webAppUrl.replace(/\\/$/, ''))) {
+        return;
+      }
+      
+      const data = event.data;
+      
+      switch (data.type) {
+        case 'openFile':
+          // Forward to VS Code extension
+          vscode.postMessage({
+            type: 'openFile',
+            filePath: data.filePath,
+            line: data.line
+          });
+          break;
+          
+        case 'ready':
+          // Web app is ready
+          loadingEl.classList.remove('visible');
+          break;
+      }
+    });
+    
+    // Listen for messages from extension
+    window.addEventListener('message', (event) => {
+      const message = event.data;
+      
+      if (message.type === 'loading') {
+        loadingEl.classList.add('visible');
+        loadingText.textContent = message.message;
+      } else if (message.type === 'refresh') {
+        // Tell iframe to refresh its data
+        iframe.contentWindow?.postMessage({ type: 'refreshData' }, '*');
+      }
+    });
+  </script>
+</body>
+</html>`;
+  }
+}
+
+// Legacy provider for backward compatibility (sidebar view)
+// Can be removed once fully migrated to panel
 export class GraphViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'monoid-visualize.graphView';
   
   private _view?: vscode.WebviewView;
-  private _graphData: GraphData = { nodes: [], edges: [] };
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
-    context: vscode.WebviewViewResolveContext,
+    _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken
   ) {
     this._view = webviewView;
@@ -21,802 +444,63 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [this._extensionUri]
     };
 
-    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
-
-    // Handle messages from the webview
-    webviewView.webview.onDidReceiveMessage(async message => {
-      switch (message.type) {
-        case 'nodeClick':
-          // Open file at the node's location
-          if (message.filePath && message.line) {
-            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-            if (workspaceFolder) {
-              const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, message.filePath);
-              try {
-                const doc = await vscode.workspace.openTextDocument(fileUri);
-                const editor = await vscode.window.showTextDocument(doc);
-                const position = new vscode.Position(message.line - 1, 0);
-                editor.selection = new vscode.Selection(position, position);
-                editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
-              } catch (err) {
-                console.error('Could not open file:', err);
-              }
-            }
-          }
-          break;
-        case 'ready':
-          // Send current graph data when webview is ready
-          this.updateGraph(this._graphData);
-          break;
-      }
-    });
-  }
-
-  public updateGraph(data: GraphData) {
-    this._graphData = data;
-    if (this._view) {
-      this._view.webview.postMessage({ type: 'updateGraph', data });
-    }
-  }
-
-  public showLoading(message: string) {
-    if (this._view) {
-      this._view.webview.postMessage({ type: 'loading', message });
-    }
-  }
-
-  public showError(message: string) {
-    if (this._view) {
-      this._view.webview.postMessage({ type: 'error', message });
-    }
-  }
-
-  private _getHtmlForWebview(webview: vscode.Webview): string {
-    return `<!DOCTYPE html>
-<html lang="en">
+    // Show a simple message directing to use the panel
+    webviewView.webview.html = `<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Code Graph</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap');
-    
-    :root {
-      --bg-primary: #0d1117;
-      --bg-secondary: #161b22;
-      --bg-tertiary: #21262d;
-      --text-primary: #c9d1d9;
-      --text-secondary: #8b949e;
-      --text-muted: #484f58;
-      --accent-cyan: #58a6ff;
-      --accent-green: #3fb950;
-      --accent-purple: #a371f7;
-      --accent-orange: #d29922;
-      --accent-pink: #f778ba;
-      --accent-red: #f85149;
-      --border-default: #30363d;
-      --shadow-glow: rgba(88, 166, 255, 0.15);
-    }
-
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
     body {
-      font-family: 'Space Grotesk', -apple-system, sans-serif;
-      background: var(--bg-primary);
-      color: var(--text-primary);
-      overflow: hidden;
-      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 20px;
+      color: #c9d1d9;
+      background: #0d1117;
     }
-
-    .container {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      background: 
-        radial-gradient(ellipse at 20% 80%, rgba(88, 166, 255, 0.08) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 20%, rgba(163, 113, 247, 0.06) 0%, transparent 50%),
-        var(--bg-primary);
-    }
-
-    .header {
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border-default);
-      background: var(--bg-secondary);
-      backdrop-filter: blur(8px);
-    }
-
-    .header h1 {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-primary);
-      letter-spacing: 0.02em;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .header h1::before {
-      content: '';
-      width: 8px;
-      height: 8px;
-      background: var(--accent-cyan);
-      border-radius: 50%;
-      box-shadow: 0 0 8px var(--accent-cyan);
-    }
-
-    .stats {
-      display: flex;
-      gap: 16px;
-      margin-top: 8px;
-    }
-
-    .stat {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: var(--text-secondary);
-    }
-
-    .stat-value {
-      color: var(--accent-cyan);
-      font-weight: 500;
-    }
-
-    .canvas-container {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
-    }
-
-    canvas {
-      width: 100%;
-      height: 100%;
-      cursor: grab;
-    }
-
-    canvas:active {
-      cursor: grabbing;
-    }
-
-    .tooltip {
-      position: absolute;
-      padding: 8px 12px;
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border-default);
-      border-radius: 6px;
-      font-size: 12px;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.15s ease;
-      max-width: 280px;
-      z-index: 1000;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-    }
-
-    .tooltip.visible {
-      opacity: 1;
-    }
-
-    .tooltip-name {
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 4px;
-    }
-
-    .tooltip-type {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      padding: 2px 6px;
-      background: var(--bg-secondary);
-      border-radius: 3px;
-      display: inline-block;
-      margin-bottom: 4px;
-    }
-
-    .tooltip-path {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      color: var(--text-muted);
-      word-break: break-all;
-    }
-
-    .legend {
+    .icon { font-size: 32px; margin-bottom: 16px; }
+    h3 { margin-bottom: 8px; font-size: 14px; }
+    p { color: #8b949e; font-size: 12px; line-height: 1.5; }
+    button {
+      margin-top: 16px;
       padding: 8px 16px;
-      border-top: 1px solid var(--border-default);
-      background: var(--bg-secondary);
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 10px;
-      color: var(--text-secondary);
-    }
-
-    .legend-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-    }
-
-    .loading-overlay, .error-overlay {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: rgba(13, 17, 23, 0.9);
-      backdrop-filter: blur(4px);
-      z-index: 100;
-    }
-
-    .loading-spinner {
-      width: 32px;
-      height: 32px;
-      border: 3px solid var(--border-default);
-      border-top-color: var(--accent-cyan);
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    .loading-text, .error-text {
-      margin-top: 12px;
-      font-size: 12px;
-      color: var(--text-secondary);
-    }
-
-    .error-text {
-      color: var(--accent-red);
-    }
-
-    .empty-state {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 24px;
-    }
-
-    .empty-icon {
-      font-size: 48px;
-      margin-bottom: 16px;
-      opacity: 0.3;
-    }
-
-    .empty-title {
-      font-size: 14px;
-      font-weight: 600;
-      color: var(--text-primary);
-      margin-bottom: 8px;
-    }
-
-    .empty-desc {
-      font-size: 12px;
-      color: var(--text-secondary);
-      max-width: 200px;
-      line-height: 1.5;
-    }
-
-    .hidden {
-      display: none !important;
-    }
-
-    .controls {
-      position: absolute;
-      bottom: 16px;
-      right: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .control-btn {
-      width: 28px;
-      height: 28px;
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border-default);
-      border-radius: 4px;
-      color: var(--text-secondary);
+      background: #238636;
+      color: white;
+      border: none;
+      border-radius: 6px;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-      transition: all 0.15s ease;
+      font-size: 12px;
     }
-
-    .control-btn:hover {
-      background: var(--bg-secondary);
-      color: var(--text-primary);
-      border-color: var(--accent-cyan);
-    }
+    button:hover { background: #2ea043; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>Code Graph</h1>
-      <div class="stats">
-        <span class="stat">Nodes: <span class="stat-value" id="nodeCount">0</span></span>
-        <span class="stat">Edges: <span class="stat-value" id="edgeCount">0</span></span>
-      </div>
-    </div>
-    
-    <div class="canvas-container">
-      <canvas id="graph"></canvas>
-      <div class="tooltip" id="tooltip">
-        <div class="tooltip-name"></div>
-        <div class="tooltip-type"></div>
-        <div class="tooltip-path"></div>
-      </div>
-      
-      <div class="loading-overlay hidden" id="loading">
-        <div class="loading-spinner"></div>
-        <div class="loading-text" id="loadingText">Analyzing code...</div>
-      </div>
-      
-      <div class="error-overlay hidden" id="error">
-        <div class="error-text" id="errorText"></div>
-      </div>
-      
-      <div class="empty-state" id="empty">
-        <div class="empty-icon">◇</div>
-        <div class="empty-title">No Graph Data</div>
-        <div class="empty-desc">Run "Visualize All Code" to analyze your codebase and generate the graph.</div>
-      </div>
-
-      <div class="controls">
-        <button class="control-btn" id="zoomIn" title="Zoom In">+</button>
-        <button class="control-btn" id="zoomOut" title="Zoom Out">−</button>
-        <button class="control-btn" id="resetView" title="Reset View">⌂</button>
-      </div>
-    </div>
-    
-    <div class="legend">
-      <div class="legend-item"><div class="legend-dot" style="background: #58a6ff"></div>Function</div>
-      <div class="legend-item"><div class="legend-dot" style="background: #a371f7"></div>Class</div>
-      <div class="legend-item"><div class="legend-dot" style="background: #3fb950"></div>Component</div>
-      <div class="legend-item"><div class="legend-dot" style="background: #f778ba"></div>Hook</div>
-      <div class="legend-item"><div class="legend-dot" style="background: #d29922"></div>Interface</div>
-      <div class="legend-item"><div class="legend-dot" style="background: #8b949e"></div>Module</div>
-    </div>
-  </div>
-
+  <div class="icon">🔮</div>
+  <h3>Monoid Graph</h3>
+  <p>Click below to open the full graph visualization in a new tab.</p>
+  <button onclick="openPanel()">Open Graph Panel</button>
   <script>
     const vscode = acquireVsCodeApi();
-    
-    const canvas = document.getElementById('graph');
-    const ctx = canvas.getContext('2d');
-    const tooltip = document.getElementById('tooltip');
-    const loadingEl = document.getElementById('loading');
-    const loadingText = document.getElementById('loadingText');
-    const errorEl = document.getElementById('error');
-    const errorText = document.getElementById('errorText');
-    const emptyEl = document.getElementById('empty');
-    const nodeCountEl = document.getElementById('nodeCount');
-    const edgeCountEl = document.getElementById('edgeCount');
-
-    // Graph state
-    let nodes = [];
-    let edges = [];
-    let transform = { x: 0, y: 0, scale: 1 };
-    let isDragging = false;
-    let dragStart = { x: 0, y: 0 };
-    let hoveredNode = null;
-    let selectedNode = null;
-
-    // Colors for node types
-    const nodeColors = {
-      function: '#58a6ff',
-      class: '#a371f7',
-      method: '#8957e5',
-      component: '#3fb950',
-      hook: '#f778ba',
-      interface: '#d29922',
-      type: '#d29922',
-      module: '#8b949e',
-      endpoint: '#f85149',
-      handler: '#f85149',
-      middleware: '#db6d28',
-      variable: '#6e7681',
-      constant: '#79c0ff',
-      test: '#a5d6ff',
-      other: '#6e7681'
-    };
-
-    // Edge colors
-    const edgeColors = {
-      calls: '#58a6ff',
-      imports: '#8b949e',
-      exports: '#3fb950',
-      extends: '#a371f7',
-      implements: '#d29922',
-      routes_to: '#f85149',
-      depends_on: '#6e7681',
-      uses: '#58a6ff',
-      defines: '#3fb950',
-      references: '#6e7681',
-      other: '#484f58'
-    };
-
-    function resizeCanvas() {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      ctx.scale(dpr, dpr);
-      draw();
+    function openPanel() {
+      vscode.postMessage({ type: 'openPanel' });
     }
-
-    function initializeLayout() {
-      // Force-directed layout simulation
-      const width = canvas.getBoundingClientRect().width;
-      const height = canvas.getBoundingClientRect().height;
-      
-      // Initialize random positions
-      nodes.forEach(node => {
-        node.x = Math.random() * width * 0.8 + width * 0.1;
-        node.y = Math.random() * height * 0.8 + height * 0.1;
-        node.vx = 0;
-        node.vy = 0;
-      });
-
-      // Create node map for edge lookup
-      const nodeMap = new Map(nodes.map(n => [n.id, n]));
-
-      // Run simulation
-      const iterations = 200;
-      const repulsion = 5000;
-      const attraction = 0.005;
-      const damping = 0.9;
-      const centerForce = 0.01;
-
-      for (let iter = 0; iter < iterations; iter++) {
-        // Repulsion between all nodes
-        for (let i = 0; i < nodes.length; i++) {
-          for (let j = i + 1; j < nodes.length; j++) {
-            const dx = nodes[j].x - nodes[i].x;
-            const dy = nodes[j].y - nodes[i].y;
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-            const force = repulsion / (dist * dist);
-            
-            const fx = (dx / dist) * force;
-            const fy = (dy / dist) * force;
-            
-            nodes[i].vx -= fx;
-            nodes[i].vy -= fy;
-            nodes[j].vx += fx;
-            nodes[j].vy += fy;
-          }
-        }
-
-        // Attraction along edges
-        edges.forEach(edge => {
-          const source = nodeMap.get(edge.source);
-          const target = nodeMap.get(edge.target);
-          if (!source || !target) return;
-          
-          const dx = target.x - source.x;
-          const dy = target.y - source.y;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          
-          const force = dist * attraction;
-          const fx = (dx / dist) * force;
-          const fy = (dy / dist) * force;
-          
-          source.vx += fx;
-          source.vy += fy;
-          target.vx -= fx;
-          target.vy -= fy;
-        });
-
-        // Center force
-        const cx = width / 2;
-        const cy = height / 2;
-        nodes.forEach(node => {
-          node.vx += (cx - node.x) * centerForce;
-          node.vy += (cy - node.y) * centerForce;
-        });
-
-        // Apply velocity with damping
-        nodes.forEach(node => {
-          node.vx *= damping;
-          node.vy *= damping;
-          node.x += node.vx;
-          node.y += node.vy;
-          
-          // Keep in bounds
-          node.x = Math.max(50, Math.min(width - 50, node.x));
-          node.y = Math.max(50, Math.min(height - 50, node.y));
-        });
-      }
-
-      // Center the view
-      resetView();
-    }
-
-    function draw() {
-      const rect = canvas.getBoundingClientRect();
-      ctx.clearRect(0, 0, rect.width, rect.height);
-      
-      ctx.save();
-      ctx.translate(transform.x, transform.y);
-      ctx.scale(transform.scale, transform.scale);
-
-      // Draw edges
-      edges.forEach(edge => {
-        const source = nodes.find(n => n.id === edge.source);
-        const target = nodes.find(n => n.id === edge.target);
-        if (!source || !target) return;
-
-        ctx.beginPath();
-        ctx.moveTo(source.x, source.y);
-        ctx.lineTo(target.x, target.y);
-        ctx.strokeStyle = edgeColors[edge.type] || edgeColors.other;
-        ctx.globalAlpha = 0.3;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-      });
-
-      // Draw nodes
-      nodes.forEach(node => {
-        const radius = node.type === 'module' ? 12 : 
-                       node.type === 'class' ? 10 : 
-                       node.type === 'component' ? 9 : 7;
-        const color = nodeColors[node.type] || nodeColors.other;
-        const isHovered = hoveredNode === node;
-        const isSelected = selectedNode === node;
-
-        // Glow effect for hovered/selected nodes
-        if (isHovered || isSelected) {
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, radius + 6, 0, Math.PI * 2);
-          ctx.fillStyle = color + '30';
-          ctx.fill();
-        }
-
-        // Node circle
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.fill();
-
-        // Border
-        ctx.strokeStyle = isHovered || isSelected ? '#ffffff' : color + '80';
-        ctx.lineWidth = isHovered || isSelected ? 2 : 1;
-        ctx.stroke();
-
-        // Label for larger nodes or when zoomed in
-        if (transform.scale > 0.8 || node.type === 'module' || node.type === 'class' || node.type === 'component') {
-          ctx.font = '10px "Space Grotesk", sans-serif';
-          ctx.fillStyle = '#c9d1d9';
-          ctx.textAlign = 'center';
-          ctx.fillText(node.label, node.x, node.y + radius + 14);
-        }
-      });
-
-      ctx.restore();
-    }
-
-    function getNodeAtPosition(x, y) {
-      const canvasX = (x - transform.x) / transform.scale;
-      const canvasY = (y - transform.y) / transform.scale;
-      
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        const node = nodes[i];
-        const radius = node.type === 'module' ? 12 : 
-                       node.type === 'class' ? 10 : 7;
-        const dx = canvasX - node.x;
-        const dy = canvasY - node.y;
-        if (dx * dx + dy * dy < radius * radius) {
-          return node;
-        }
-      }
-      return null;
-    }
-
-    function showTooltip(node, x, y) {
-      const rect = canvas.getBoundingClientRect();
-      tooltip.querySelector('.tooltip-name').textContent = node.label;
-      tooltip.querySelector('.tooltip-type').textContent = node.type;
-      tooltip.querySelector('.tooltip-type').style.color = nodeColors[node.type] || nodeColors.other;
-      tooltip.querySelector('.tooltip-path').textContent = node.filePath + ':' + node.line;
-      
-      let left = x + 10;
-      let top = y + 10;
-      
-      // Keep tooltip in bounds
-      const tooltipRect = tooltip.getBoundingClientRect();
-      if (left + tooltipRect.width > rect.width) {
-        left = x - tooltipRect.width - 10;
-      }
-      if (top + tooltipRect.height > rect.height) {
-        top = y - tooltipRect.height - 10;
-      }
-      
-      tooltip.style.left = left + 'px';
-      tooltip.style.top = top + 'px';
-      tooltip.classList.add('visible');
-    }
-
-    function hideTooltip() {
-      tooltip.classList.remove('visible');
-    }
-
-    function resetView() {
-      if (nodes.length === 0) return;
-      
-      const rect = canvas.getBoundingClientRect();
-      const minX = Math.min(...nodes.map(n => n.x));
-      const maxX = Math.max(...nodes.map(n => n.x));
-      const minY = Math.min(...nodes.map(n => n.y));
-      const maxY = Math.max(...nodes.map(n => n.y));
-      
-      const graphWidth = maxX - minX + 100;
-      const graphHeight = maxY - minY + 100;
-      
-      const scaleX = rect.width / graphWidth;
-      const scaleY = rect.height / graphHeight;
-      transform.scale = Math.min(scaleX, scaleY, 2) * 0.9;
-      
-      const centerX = (minX + maxX) / 2;
-      const centerY = (minY + maxY) / 2;
-      transform.x = rect.width / 2 - centerX * transform.scale;
-      transform.y = rect.height / 2 - centerY * transform.scale;
-      
-      draw();
-    }
-
-    // Event handlers
-    canvas.addEventListener('mousedown', (e) => {
-      isDragging = true;
-      dragStart = { x: e.clientX - transform.x, y: e.clientY - transform.y };
-      canvas.style.cursor = 'grabbing';
-    });
-
-    canvas.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      
-      if (isDragging) {
-        transform.x = e.clientX - dragStart.x;
-        transform.y = e.clientY - dragStart.y;
-        draw();
-      } else {
-        const node = getNodeAtPosition(x, y);
-        if (node !== hoveredNode) {
-          hoveredNode = node;
-          draw();
-          if (node) {
-            showTooltip(node, x, y);
-            canvas.style.cursor = 'pointer';
-          } else {
-            hideTooltip();
-            canvas.style.cursor = 'grab';
-          }
-        } else if (node) {
-          showTooltip(node, x, y);
-        }
-      }
-    });
-
-    canvas.addEventListener('mouseup', () => {
-      isDragging = false;
-      canvas.style.cursor = hoveredNode ? 'pointer' : 'grab';
-    });
-
-    canvas.addEventListener('mouseleave', () => {
-      isDragging = false;
-      hideTooltip();
-    });
-
-    canvas.addEventListener('click', (e) => {
-      if (hoveredNode) {
-        selectedNode = hoveredNode;
-        draw();
-        vscode.postMessage({
-          type: 'nodeClick',
-          filePath: hoveredNode.filePath,
-          line: hoveredNode.line
-        });
-      } else {
-        selectedNode = null;
-        draw();
-      }
-    });
-
-    canvas.addEventListener('wheel', (e) => {
-      e.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      
-      const zoom = e.deltaY < 0 ? 1.1 : 0.9;
-      const newScale = Math.max(0.1, Math.min(5, transform.scale * zoom));
-      
-      // Zoom towards mouse position
-      transform.x = mouseX - (mouseX - transform.x) * (newScale / transform.scale);
-      transform.y = mouseY - (mouseY - transform.y) * (newScale / transform.scale);
-      transform.scale = newScale;
-      
-      draw();
-    });
-
-    document.getElementById('zoomIn').addEventListener('click', () => {
-      transform.scale = Math.min(5, transform.scale * 1.2);
-      draw();
-    });
-
-    document.getElementById('zoomOut').addEventListener('click', () => {
-      transform.scale = Math.max(0.1, transform.scale / 1.2);
-      draw();
-    });
-
-    document.getElementById('resetView').addEventListener('click', resetView);
-
-    // Handle messages from extension
-    window.addEventListener('message', (event) => {
-      const message = event.data;
-      
-      switch (message.type) {
-        case 'updateGraph':
-          loadingEl.classList.add('hidden');
-          errorEl.classList.add('hidden');
-          
-          nodes = message.data.nodes || [];
-          edges = message.data.edges || [];
-          
-          nodeCountEl.textContent = nodes.length;
-          edgeCountEl.textContent = edges.length;
-          
-          if (nodes.length === 0) {
-            emptyEl.classList.remove('hidden');
-          } else {
-            emptyEl.classList.add('hidden');
-            initializeLayout();
-          }
-          break;
-          
-        case 'loading':
-          loadingEl.classList.remove('hidden');
-          errorEl.classList.add('hidden');
-          emptyEl.classList.add('hidden');
-          loadingText.textContent = message.message;
-          break;
-          
-        case 'error':
-          loadingEl.classList.add('hidden');
-          errorEl.classList.remove('hidden');
-          errorText.textContent = message.message;
-          break;
-      }
-    });
-
-    // Initialize
-    window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
-    
-    // Notify extension that webview is ready
-    vscode.postMessage({ type: 'ready' });
   </script>
 </body>
 </html>`;
+
+    webviewView.webview.onDidReceiveMessage(message => {
+      if (message.type === 'openPanel') {
+        vscode.commands.executeCommand('monoid-visualize.openGraphPanel');
+      }
+    });
+  }
+
+  public updateGraph(_data: any) {
+    // No-op for sidebar, use panel instead
+  }
+
+  public showLoading(_message: string) {
+    // No-op for sidebar
+  }
+
+  public showError(_message: string) {
+    // No-op for sidebar
   }
 }

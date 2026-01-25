@@ -1,12 +1,10 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import * as crypto from 'crypto';
 import { CodeAnalyzer } from './analyzer';
 import { SupabaseService } from './supabase/client';
-import { GraphViewProvider } from './webview/graphViewProvider';
+import { GraphViewProvider, GraphPanelManager } from './webview/graphViewProvider';
 import { testVSCodeLM } from './analyzer/llmAnalyzer';
 
-let graphViewProvider: GraphViewProvider;
 let supabaseService: SupabaseService;
 let analyzer: CodeAnalyzer;
 
@@ -17,20 +15,28 @@ export function activate(context: vscode.ExtensionContext) {
   supabaseService = new SupabaseService();
   analyzer = new CodeAnalyzer();
 
-  // Create and register the webview provider
-  graphViewProvider = new GraphViewProvider(context.extensionUri);
+  // Register the sidebar view (shows "Open Panel" button)
+  const sidebarProvider = new GraphViewProvider(context.extensionUri);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
       GraphViewProvider.viewType,
-      graphViewProvider
+      sidebarProvider
     )
   );
 
-  // Register the main command
+  // Register command to open the graph panel
+  const openPanelCommand = vscode.commands.registerCommand(
+    'monoid-visualize.openGraphPanel',
+    async () => {
+      await openGraphPanel(context.extensionUri);
+    }
+  );
+
+  // Register the main visualization command
   const visualizeCommand = vscode.commands.registerCommand(
     'monoid-visualize.visualizeAllCode',
     async () => {
-      await visualizeAllCode();
+      await visualizeAllCode(context.extensionUri);
     }
   );
 
@@ -38,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
   const refreshCommand = vscode.commands.registerCommand(
     'monoid-visualize.refreshGraph',
     async () => {
-      await loadExistingGraph();
+      GraphPanelManager.refreshPanel();
     }
   );
 
@@ -58,13 +64,41 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
-  context.subscriptions.push(visualizeCommand, refreshCommand, helloWorldCommand, testLMCommand);
-
-  // Try to load existing graph data on activation
-  loadExistingGraph();
+  context.subscriptions.push(
+    openPanelCommand,
+    visualizeCommand,
+    refreshCommand,
+    helloWorldCommand,
+    testLMCommand
+  );
 }
 
-async function visualizeAllCode(): Promise<void> {
+async function openGraphPanel(extensionUri: vscode.Uri): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('No workspace folder open');
+    return;
+  }
+
+  const workspaceName = workspaceFolder.name;
+  const workspaceSlug = workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const repoSlug = workspaceSlug; // Same as workspace for now
+
+  // Try to get the latest version ID
+  let versionId: string | undefined;
+  try {
+    const versions = await supabaseService.getAllVersionsForWorkspace(workspaceSlug);
+    if (versions.length > 0) {
+      versionId = versions[0].version.id;
+    }
+  } catch (err) {
+    // No existing version, that's okay
+  }
+
+  GraphPanelManager.openPanel(extensionUri, workspaceSlug, repoSlug, versionId);
+}
+
+async function visualizeAllCode(extensionUri: vscode.Uri): Promise<void> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     vscode.window.showErrorMessage('No workspace folder open');
@@ -81,7 +115,7 @@ async function visualizeAllCode(): Promise<void> {
       },
       async (progress) => {
         // Phase 1: Analyze code
-        graphViewProvider.showLoading('Analyzing codebase...');
+        GraphPanelManager.showLoading('Analyzing codebase...');
         progress.report({ message: 'Analyzing codebase...', increment: 0 });
 
         const analysisResult = await analyzer.analyzeWorkspace(workspaceFolder, progress);
@@ -91,24 +125,25 @@ async function visualizeAllCode(): Promise<void> {
         
         if (nodeCount === 0) {
           vscode.window.showWarningMessage('No code elements found to visualize');
-          graphViewProvider.updateGraph({ nodes: [], edges: [] });
           return;
         }
 
         progress.report({ message: `Found ${nodeCount} nodes, ${edgeCount} edges`, increment: 50 });
 
         // Phase 2: Save to Supabase
-        graphViewProvider.showLoading('Saving to Supabase...');
+        GraphPanelManager.showLoading('Saving to Supabase...');
         progress.report({ message: 'Saving to Supabase...', increment: 60 });
 
         try {
           // Create or get workspace
           const workspaceName = workspaceFolder.name;
           const workspace = await supabaseService.getOrCreateWorkspace(workspaceName);
+          const workspaceSlug = workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
           // Create or get repo
           const repoName = workspaceName;
           const repo = await supabaseService.getOrCreateRepo(workspace.id, repoName);
+          const repoSlug = workspaceSlug;
 
           // Create new version with unique commit sha
           const commitSha = generateCommitSha();
@@ -127,71 +162,25 @@ async function visualizeAllCode(): Promise<void> {
           // Update version counts
           await supabaseService.updateVersionCounts(version.id, nodeCount, edgeCount);
 
-          progress.report({ message: 'Loading graph...', increment: 95 });
+          progress.report({ message: 'Opening graph...', increment: 95 });
 
-          // Load and display the graph
-          const graphData = await supabaseService.getGraphData(version.id);
-          graphViewProvider.updateGraph(graphData);
+          // Open the panel with the new version
+          GraphPanelManager.openPanel(extensionUri, workspaceSlug, repoSlug, version.id);
 
           vscode.window.showInformationMessage(
             `Visualized ${nodeCount} nodes and ${edgeCount} edges from ${workspaceName}`
           );
         } catch (supabaseError: any) {
           console.error('Supabase error:', supabaseError);
-          
-          // Still show local visualization even if Supabase fails
-          const localGraphData = {
-            nodes: analysisResult.nodes.map((node, index) => ({
-              id: `local-${index}`,
-              label: node.name,
-              type: node.node_type,
-              filePath: node.file_path,
-              line: node.start_line
-            })),
-            edges: [] // Can't show edges without proper ID mapping for local
-          };
-          
-          graphViewProvider.updateGraph(localGraphData);
-          vscode.window.showWarningMessage(
-            `Displayed ${nodeCount} nodes locally. Supabase sync failed: ${supabaseError.message}`
+          vscode.window.showErrorMessage(
+            `Supabase sync failed: ${supabaseError.message}`
           );
         }
       }
     );
   } catch (error: any) {
     console.error('Visualization error:', error);
-    graphViewProvider.showError(error.message);
     vscode.window.showErrorMessage(`Failed to visualize code: ${error.message}`);
-  }
-}
-
-async function loadExistingGraph(): Promise<void> {
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-  if (!workspaceFolder) {
-    return;
-  }
-
-  try {
-    graphViewProvider.showLoading('Loading existing graph...');
-
-    const workspaceName = workspaceFolder.name;
-    const workspaceSlug = workspaceName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    
-    const versions = await supabaseService.getAllVersionsForWorkspace(workspaceSlug);
-    
-    if (versions.length === 0) {
-      graphViewProvider.updateGraph({ nodes: [], edges: [] });
-      return;
-    }
-
-    // Get the most recent version
-    const latestVersion = versions[0].version;
-    const graphData = await supabaseService.getGraphData(latestVersion.id);
-    
-    graphViewProvider.updateGraph(graphData);
-  } catch (error: any) {
-    console.error('Failed to load existing graph:', error);
-    graphViewProvider.updateGraph({ nodes: [], edges: [] });
   }
 }
 

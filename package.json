@@ -19,12 +19,17 @@
       },
       {
         "command": "monoid-visualize.visualizeAllCode",
-        "title": "Visualize All Code",
+        "title": "Monoid: Visualize All Code",
         "icon": "$(graph)"
       },
       {
+        "command": "monoid-visualize.openGraphPanel",
+        "title": "Monoid: Open Graph Panel",
+        "icon": "$(preview)"
+      },
+      {
         "command": "monoid-visualize.refreshGraph",
-        "title": "Refresh Graph",
+        "title": "Monoid: Refresh Graph",
         "icon": "$(refresh)"
       },
       {
@@ -82,6 +87,11 @@
           "type": "string",
           "default": "",
           "description": "Workspace slug for storing code graphs"
+        },
+        "monoid-visualize.webAppUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "URL of the Monoid web app to embed in the graph panel"
         }
       }
     }

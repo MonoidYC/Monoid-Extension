@@ -45,6 +45,7 @@ export interface CodeNode {
   end_column?: number;
   snippet?: string;
   signature?: string;
+  summary?: string;
   metadata?: Record<string, unknown>;
   github_link?: string;
 }
@@ -109,6 +110,7 @@ export interface LocalNode {
   end_column?: number;
   snippet?: string;
   signature?: string;
+  summary?: string;
   metadata?: Record<string, unknown>;
   github_link?: string;
 }
@@ -133,6 +135,7 @@ export interface GraphNode {
   type: NodeType;
   filePath: string;
   line: number;
+  summary?: string;
   githubLink?: string;
   x?: number;
   y?: number;

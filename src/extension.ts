@@ -9,6 +9,7 @@ import { testVSCodeLM } from './analyzer/llmAnalyzer';
 import { GitHubInfo } from './types';
 import { TestTreeProvider, TestTreeItem, TestGenerator, TestRunner } from './testing';
 import { getGitHubInfoFromGit } from './utils/gitUtils';
+import { initAuthService, getAuthService } from './auth';
 
 let supabaseService: SupabaseService;
 let analyzer: CodeAnalyzer;
@@ -19,9 +20,30 @@ let testRunner: TestRunner;
 export function activate(context: vscode.ExtensionContext) {
   console.log('Monoid Visualize extension is now active!');
 
+  // Initialize auth service first
+  const authService = initAuthService(context);
+
   // Initialize services
   supabaseService = new SupabaseService();
   analyzer = new CodeAnalyzer();
+  
+  // Register URI handler for auth callback
+  const uriHandler = vscode.window.registerUriHandler({
+    handleUri(uri: vscode.Uri): vscode.ProviderResult<void> {
+      console.log('[Monoid] Received URI:', uri.toString());
+      
+      if (uri.path === '/auth/callback') {
+        authService.handleAuthCallback(uri).then(success => {
+          if (success) {
+            // Refresh panels to show authenticated state
+            GraphPanelManager.refreshPanel();
+            TestPanelManager.refreshPanel();
+          }
+        });
+      }
+    }
+  });
+  context.subscriptions.push(uriHandler);
 
   // Initialize testing components
   testTreeProvider = new TestTreeProvider();
@@ -269,6 +291,82 @@ export function activate(context: vscode.ExtensionContext) {
     }
   );
 
+  // Sync existing tests to Supabase (without regenerating)
+  const syncTestsCommand = vscode.commands.registerCommand(
+    'monoid-visualize.syncTestsToSupabase',
+    async () => {
+      const count = await testGenerator.syncExistingTestsToSupabase();
+      if (count > 0) {
+        testTreeProvider.refresh();
+        TestPanelManager.refreshPanel();
+      }
+    }
+  );
+
+  // Check if tests exist (used by webview)
+  const checkTestsExistCommand = vscode.commands.registerCommand(
+    'monoid-visualize.checkTestsExist',
+    () => {
+      return testGenerator.hasExistingTests();
+    }
+  );
+
+  // ==================== Auth Commands ====================
+
+  // Sign in command - opens browser for OAuth
+  const signInCommand = vscode.commands.registerCommand(
+    'monoid-visualize.signIn',
+    async () => {
+      await authService.startAuthFlow();
+    }
+  );
+
+  // Sign out command
+  const signOutCommand = vscode.commands.registerCommand(
+    'monoid-visualize.signOut',
+    async () => {
+      await authService.signOut();
+      GraphPanelManager.refreshPanel();
+      TestPanelManager.refreshPanel();
+    }
+  );
+
+  // Get auth session (used by webviews)
+  const getAuthSessionCommand = vscode.commands.registerCommand(
+    'monoid-visualize.getAuthSession',
+    async () => {
+      return await authService.getSession();
+    }
+  );
+
+  // Check if authenticated
+  const isAuthenticatedCommand = vscode.commands.registerCommand(
+    'monoid-visualize.isAuthenticated',
+    async () => {
+      return await authService.isAuthenticated();
+    }
+  );
+
+  // Paste session manually (for development/debugging when URI handler doesn't work)
+  const pasteSessionCommand = vscode.commands.registerCommand(
+    'monoid-visualize.pasteSession',
+    async () => {
+      const session = await vscode.window.showInputBox({
+        prompt: 'Paste the session token from the browser (base64 encoded)',
+        placeHolder: 'eyJhY2Nlc3NfdG9rZW4iOi4uLg==',
+        ignoreFocusOut: true,
+      });
+
+      if (session) {
+        const success = await authService.setSessionFromBase64(session);
+        if (success) {
+          GraphPanelManager.refreshPanel();
+          TestPanelManager.refreshPanel();
+        }
+      }
+    }
+  );
+
   context.subscriptions.push(
     openPanelCommand,
     visualizeCommand,
@@ -287,7 +385,14 @@ export function activate(context: vscode.ExtensionContext) {
     regenerateTestCommand,
     generateAllTestsCommand,
     openTestPanelCommand,
-    deleteAllTestsCommand
+    deleteAllTestsCommand,
+    syncTestsCommand,
+    checkTestsExistCommand,
+    signInCommand,
+    signOutCommand,
+    getAuthSessionCommand,
+    isAuthenticatedCommand,
+    pasteSessionCommand
   );
 }
 
@@ -428,9 +533,27 @@ async function visualizeAllCode(extensionUri: vscode.Uri): Promise<void> {
           return;
         }
 
-        progress.report({ message: `Found ${nodeCount} nodes, ${edgeCount} edges`, increment: 50 });
+        progress.report({ message: `Found ${nodeCount} nodes, ${edgeCount} edges`, increment: 40 });
 
-        // Phase 2: Save to Supabase
+        // Phase 2: Generate summaries using Gemini
+        GraphPanelManager.showLoading('Generating summaries...');
+        progress.report({ message: 'Generating summaries with Gemini...', increment: 45 });
+
+        const { getGeminiSummarizer } = await import('./analyzer/geminiSummarizer.js');
+        const summarizer = getGeminiSummarizer();
+        const summaries = await summarizer.generateSummaries(analysisResult.nodes, progress);
+        
+        // Apply summaries to nodes
+        for (const node of analysisResult.nodes) {
+          const summary = summaries.get(node.stable_id);
+          if (summary) {
+            node.summary = summary;
+          }
+        }
+        
+        console.log(`[Monoid] Generated ${summaries.size}/${nodeCount} summaries`);
+
+        // Phase 3: Save to Supabase
         GraphPanelManager.showLoading('Saving to Supabase...');
         progress.report({ message: 'Saving to Supabase...', increment: 60 });
 

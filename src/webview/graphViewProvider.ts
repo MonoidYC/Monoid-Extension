@@ -72,6 +72,19 @@ export class GraphPanelManager {
             vscode.env.openExternal(vscode.Uri.parse(message.url));
           }
           break;
+        case 'signIn':
+          vscode.commands.executeCommand('monoid-visualize.signIn');
+          break;
+        case 'signOut':
+          vscode.commands.executeCommand('monoid-visualize.signOut');
+          break;
+        case 'getAuthSession':
+          console.log('[GraphPanel] Received getAuthSession request');
+          const session = await vscode.commands.executeCommand('monoid-visualize.getAuthSession');
+          console.log('[GraphPanel] Session retrieved:', session ? 'yes' : 'no');
+          this.panel?.webview.postMessage({ type: 'authSession', session });
+          console.log('[GraphPanel] Sent authSession to webview');
+          break;
       }
     });
 
@@ -142,16 +155,17 @@ export class GraphPanelManager {
     versionId?: string
   ): string {
     // Build the graph URL - the dashboard uses /graph/[versionId] format
+    // Add ?vscode=true to bypass authentication (proof of concept)
     const graphUrl = versionId 
-      ? `${dashboardUrl}/graph/${versionId}`
-      : `${dashboardUrl}`;
+      ? `${dashboardUrl}/graph/${versionId}?vscode=true`
+      : `${dashboardUrl}?vscode=true`;
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${dashboardUrl} https://*.vercel.app https://*.supabase.co http://localhost:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${dashboardUrl} https://*.vercel.app https://*.supabase.co https://github.com https://*.github.com http://localhost:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
   <title>Monoid Graph</title>
   <style>
     * {
@@ -401,6 +415,9 @@ export class GraphPanelManager {
     const dashboardUrl = '${dashboardUrl}';
     const hasVersion = ${versionId ? 'true' : 'false'};
     
+    // Track if we've already sent the auth session to prevent loops
+    let authSessionSent = false;
+    
     // Show loading initially if we have a version
     if (hasVersion && iframe) {
       loadingEl.classList.add('visible');
@@ -445,6 +462,9 @@ export class GraphPanelManager {
       vscode.postMessage({ type: 'refresh' });
     });
     
+    // Request auth session from extension on load
+    vscode.postMessage({ type: 'getAuthSession' });
+
     // Listen for messages from the embedded dashboard
     window.addEventListener('message', (event) => {
       const data = event.data;
@@ -465,6 +485,15 @@ export class GraphPanelManager {
         if (iframe) {
           iframe.contentWindow?.postMessage({ type: 'refreshData' }, '*');
         }
+      } else if (data.type === 'authSession') {
+        // Pass auth session to iframe (only once to prevent loops)
+        if (iframe && iframe.contentWindow && !authSessionSent && data.session) {
+          authSessionSent = true;
+          iframe.contentWindow.postMessage({ 
+            type: 'setAuthSession', 
+            session: data.session 
+          }, '*');
+        }
       }
       
       // Handle messages from the dashboard iframe
@@ -476,8 +505,39 @@ export class GraphPanelManager {
         });
       } else if (data.type === 'ready') {
         loadingEl.classList.remove('visible');
+        // Send auth session when iframe is ready (only if not already sent)
+        if (!authSessionSent) {
+          vscode.postMessage({ type: 'getAuthSession' });
+        }
+      } else if (data.type === 'openAuthUrl' || data.type === 'openExternalUrl') {
+        // Handle OAuth/auth URLs that need to be opened in external browser
+        if (data.url) {
+          vscode.postMessage({ type: 'openExternal', url: data.url });
+        }
+      } else if (data.type === 'requestSignIn') {
+        // Dashboard is requesting sign in
+        vscode.postMessage({ type: 'signIn' });
+      } else if (data.type === 'requestSignOut') {
+        // Dashboard is requesting sign out
+        vscode.postMessage({ type: 'signOut' });
+      } else if (data.type === 'requestAuthSession') {
+        // Dashboard is requesting auth session
+        vscode.postMessage({ type: 'getAuthSession' });
       }
     });
+
+    // Notify iframe that it's in a VS Code webview and send auth session
+    if (iframe) {
+      iframe.addEventListener('load', () => {
+        setTimeout(() => {
+          iframe.contentWindow?.postMessage({ type: 'vscodeWebview', isWebview: true }, '*');
+          // Request auth session to send to iframe (only if not already sent)
+          if (!authSessionSent) {
+            vscode.postMessage({ type: 'getAuthSession' });
+          }
+        }, 500);
+      });
+    }
   </script>
 </body>
 </html>`;

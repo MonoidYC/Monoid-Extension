@@ -4,7 +4,7 @@ export type TestStatus = 'pending' | 'passed' | 'failed' | 'skipped' | 'running'
 
 export type TestType = 'e2e' | 'unit' | 'integration' | 'security' | 'contract' | 'smoke' | 'regression' | 'performance' | 'other';
 
-export type SourceType = 'file' | 'generated' | 'external';
+export type SourceType = 'file' | 'generated' | 'external' | 'synced';
 
 export type CoverageType = 'covers' | 'calls' | 'tests_endpoint';
 

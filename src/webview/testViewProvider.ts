@@ -43,7 +43,7 @@ export class TestPanelManager {
     // Create new panel
     this.panel = vscode.window.createWebviewPanel(
       'monoid-visualize.testPanel',
-      '🧪 Monoid Tests',
+      'Monoid Tests',
       vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -67,13 +67,33 @@ export class TestPanelManager {
         case 'generateTests':
           vscode.commands.executeCommand('monoid-visualize.generateAllTests');
           break;
+        case 'syncTests':
+          vscode.commands.executeCommand('monoid-visualize.syncTestsToSupabase');
+          break;
         case 'deleteAllTests':
           vscode.commands.executeCommand('monoid-visualize.deleteAllTests');
+          break;
+        case 'checkTestsExist':
+          const hasTests = await vscode.commands.executeCommand('monoid-visualize.checkTestsExist');
+          this.panel?.webview.postMessage({ type: 'testsExistResult', hasTests });
           break;
         case 'openExternal':
           if (message.url) {
             vscode.env.openExternal(vscode.Uri.parse(message.url));
           }
+          break;
+        case 'signIn':
+          vscode.commands.executeCommand('monoid-visualize.signIn');
+          break;
+        case 'signOut':
+          vscode.commands.executeCommand('monoid-visualize.signOut');
+          break;
+        case 'getAuthSession':
+          console.log('[TestPanel] Received getAuthSession request');
+          const session = await vscode.commands.executeCommand('monoid-visualize.getAuthSession');
+          console.log('[TestPanel] Session retrieved:', session ? 'yes' : 'no');
+          this.panel?.webview.postMessage({ type: 'authSession', session });
+          console.log('[TestPanel] Sent authSession to webview');
           break;
       }
     });
@@ -102,8 +122,14 @@ export class TestPanelManager {
    * Send a message to refresh the embedded app
    */
   static refreshPanel(): void {
-    if (this.panel) {
-      this.panel.webview.postMessage({ type: 'refresh' });
+    if (this.panel && this.currentVersionId) {
+      // Reload the iframe with the current version to pick up new data
+      const config = vscode.workspace.getConfiguration('monoid-visualize');
+      const dashboardUrl = config.get<string>('webAppUrl') || 'https://monoid-dashboard.vercel.app';
+      this.panel.webview.postMessage({ 
+        type: 'navigate', 
+        url: `${dashboardUrl}/tests/${this.currentVersionId}` 
+      });
     }
   }
 
@@ -157,16 +183,17 @@ export class TestPanelManager {
     versionId?: string
   ): string {
     // Build the test URL - the dashboard uses /tests/[versionId] format
+    // Add ?vscode=true to bypass authentication (proof of concept)
     const testUrl = versionId 
-      ? `${dashboardUrl}/tests/${versionId}`
-      : `${dashboardUrl}`;
+      ? `${dashboardUrl}/tests/${versionId}?vscode=true`
+      : `${dashboardUrl}?vscode=true`;
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${dashboardUrl} https://*.vercel.app https://*.supabase.co http://localhost:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${dashboardUrl} https://*.vercel.app https://*.supabase.co https://github.com https://*.github.com http://localhost:*; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
   <title>Monoid Tests</title>
   <style>
     * {
@@ -417,12 +444,6 @@ export class TestPanelManager {
       display: flex;
     }
 
-    .empty-icon {
-      font-size: 48px;
-      margin-bottom: 16px;
-      opacity: 0.5;
-    }
-
     .empty-title {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 18px;
@@ -454,17 +475,18 @@ export class TestPanelManager {
         ${versionId ? `<span class="toolbar-info" style="color: #34d399;">${versionId.slice(0, 8)}...</span>` : ''}
       </div>
       <div class="toolbar-actions">
-        <button class="btn btn-primary" id="generateBtn" title="Generate tests for the app">✨ Generate</button>
+        <button class="btn btn-primary" id="syncBtn" title="Sync existing tests to Supabase" style="display: none;">Sync</button>
+        <button class="btn btn-primary" id="generateBtn" title="Generate tests for the app">Generate</button>
         <div class="run-group">
-          <button class="btn btn-run" id="runBtn" title="Run all tests">▶ Run Tests</button>
+          <button class="btn btn-run" id="runBtn" title="Run all tests">Run Tests</button>
           <div class="toggle-container active" id="headedToggle" title="Toggle headed/headless mode">
             <span class="toggle-label">Headed</span>
             <div class="toggle-switch"></div>
           </div>
         </div>
-        <button class="btn" id="reloadBtn" title="Reload dashboard">⟳ Reload</button>
-        <button class="btn" id="openExternalBtn" title="Open in browser">↗ External</button>
-        ${versionId ? '<button class="btn btn-danger" id="deleteAllBtn" title="Delete all tests for this version">🗑 Delete All</button>' : ''}
+        <button class="btn" id="reloadBtn" title="Reload dashboard">Reload</button>
+        <button class="btn" id="openExternalBtn" title="Open in browser">External</button>
+        ${versionId ? '<button class="btn btn-danger" id="deleteAllBtn" title="Delete all tests for this version">Delete All</button>' : ''}
       </div>
     </div>
     
@@ -483,13 +505,12 @@ export class TestPanelManager {
       </div>
 
       <div class="empty-state ${!versionId ? 'visible' : ''}" id="emptyState">
-        <div class="empty-icon">🧪</div>
         <div class="empty-title">No Tests Yet</div>
         <div class="empty-desc">
           Run "Generate All Tests" to automatically create E2E tests for your application using Playwright.
         </div>
         <button class="btn btn-primary" id="generateAllBtn">
-          ✨ Generate All Tests
+          Generate All Tests
         </button>
       </div>
     </div>
@@ -539,8 +560,22 @@ export class TestPanelManager {
       }
     });
     
+    // Button elements
+    const syncBtn = document.getElementById('syncBtn');
+    const generateBtn = document.getElementById('generateBtn');
+    const generateAllBtn = document.getElementById('generateAllBtn');
+
+    // Check if tests exist and update buttons accordingly
+    vscode.postMessage({ type: 'checkTestsExist' });
+
     // Toolbar buttons
-    document.getElementById('generateBtn').addEventListener('click', () => {
+    syncBtn?.addEventListener('click', () => {
+      loadingEl.classList.add('visible');
+      loadingText.textContent = 'Syncing tests to Supabase...';
+      vscode.postMessage({ type: 'syncTests' });
+    });
+
+    generateBtn.addEventListener('click', () => {
       vscode.postMessage({ type: 'generateTests' });
     });
     
@@ -560,7 +595,7 @@ export class TestPanelManager {
       vscode.postMessage({ type: 'openExternal', url: testUrl });
     });
 
-    document.getElementById('generateAllBtn')?.addEventListener('click', () => {
+    generateAllBtn?.addEventListener('click', () => {
       loadingEl.classList.add('visible');
       loadingText.textContent = 'Generating tests...';
       emptyState.classList.remove('visible');
@@ -589,7 +624,11 @@ export class TestPanelManager {
         }
       } else if (data.type === 'refresh') {
         if (iframe) {
-          iframe.contentWindow?.postMessage({ type: 'refreshData' }, '*');
+          // Reload the iframe to pick up new data
+          const currentUrl = iframe.src;
+          iframe.src = currentUrl; // Force reload
+          loadingEl.classList.add('visible');
+          loadingText.textContent = 'Refreshing...';
         }
       }
       
@@ -602,8 +641,42 @@ export class TestPanelManager {
         });
       } else if (data.type === 'ready') {
         loadingEl.classList.remove('visible');
+      } else if (data.type === 'openAuthUrl' || data.type === 'openExternalUrl') {
+        // Handle OAuth/auth URLs that need to be opened in external browser
+        if (data.url) {
+          vscode.postMessage({ type: 'openExternal', url: data.url });
+        }
+      } else if (data.type === 'testsExistResult') {
+        // Update button states based on whether tests exist
+        if (data.hasTests) {
+          // Tests exist - show Sync button, change Generate to Overwrite
+          if (syncBtn) syncBtn.style.display = 'inline-flex';
+          if (generateBtn) {
+            generateBtn.textContent = 'Overwrite';
+            generateBtn.title = 'Regenerate all tests (will overwrite existing files)';
+          }
+          if (generateAllBtn) {
+            generateAllBtn.textContent = 'Overwrite All Tests';
+          }
+        } else {
+          // No tests - hide Sync button, show Generate
+          if (syncBtn) syncBtn.style.display = 'none';
+          if (generateBtn) {
+            generateBtn.textContent = 'Generate';
+            generateBtn.title = 'Generate tests for the app';
+          }
+        }
       }
     });
+
+    // Notify iframe that it's in a VS Code webview (for OAuth handling)
+    if (iframe) {
+      iframe.addEventListener('load', () => {
+        setTimeout(() => {
+          iframe.contentWindow?.postMessage({ type: 'vscodeWebview', isWebview: true }, '*');
+        }, 500);
+      });
+    }
   </script>
 </body>
 </html>`;

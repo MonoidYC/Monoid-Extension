@@ -183,6 +183,7 @@ export class SupabaseService {
         end_column: node.end_column,
         snippet: node.snippet?.substring(0, 1000), // Limit snippet size
         signature: node.signature,
+        summary: node.summary,
         metadata: node.metadata || {},
         github_link: node.github_link
       }));
@@ -542,6 +543,15 @@ export class SupabaseService {
       .single();
 
     if (error) {
+      // Log what stable_ids exist for this version to help debug
+      const { data: existingNodes } = await client
+        .from('test_nodes')
+        .select('stable_id')
+        .eq('version_id', versionId)
+        .limit(10);
+      
+      console.log(`[Supabase] getTestNodeByStableId failed for "${stableId}"`);
+      console.log(`[Supabase] Sample stable_ids for version ${versionId}:`, existingNodes?.map(n => n.stable_id));
       return null;
     }
 

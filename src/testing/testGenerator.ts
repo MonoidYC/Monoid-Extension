@@ -800,4 +800,147 @@ Format: Start with imports, then test.describe block containing multiple test() 
     vscode.window.showErrorMessage(`Could not find source file for ${testFilePath}`);
     return null;
   }
+
+  /**
+   * Check if test files already exist in the e2e directory
+   */
+  hasExistingTests(): boolean {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      return false;
+    }
+
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    const testOutputDir = config.get<string>('testOutputDir') || 'e2e';
+    const testDirPath = path.join(workspaceFolder.uri.fsPath, testOutputDir);
+
+    if (!fs.existsSync(testDirPath)) {
+      return false;
+    }
+
+    const files = fs.readdirSync(testDirPath);
+    return files.some(f => f.endsWith('.spec.ts') || f.endsWith('.spec.js'));
+  }
+
+  /**
+   * Get list of existing test files
+   */
+  getExistingTestFiles(): string[] {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      return [];
+    }
+
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    const testOutputDir = config.get<string>('testOutputDir') || 'e2e';
+    const testDirPath = path.join(workspaceFolder.uri.fsPath, testOutputDir);
+
+    if (!fs.existsSync(testDirPath)) {
+      return [];
+    }
+
+    const files = fs.readdirSync(testDirPath);
+    return files
+      .filter(f => f.endsWith('.spec.ts') || f.endsWith('.spec.js'))
+      .map(f => path.join(testOutputDir, f));
+  }
+
+  /**
+   * Sync existing test files to Supabase without regenerating them
+   */
+  async syncExistingTestsToSupabase(): Promise<number> {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      vscode.window.showErrorMessage('No workspace folder open');
+      return 0;
+    }
+
+    this.outputChannel.show(true);
+    this.log('='.repeat(60));
+    this.log('Syncing Existing Tests to Supabase');
+    this.log('='.repeat(60));
+
+    const testFiles = this.getExistingTestFiles();
+    if (testFiles.length === 0) {
+      this.log('No existing test files found');
+      vscode.window.showInformationMessage('No test files found in e2e directory');
+      return 0;
+    }
+
+    this.log(`Found ${testFiles.length} test file(s)`);
+
+    // Get or create version (same logic as saveToSupabase)
+    const gitInfo = await getGitHubInfoFromGit(workspaceFolder.uri.fsPath);
+    const workspace = await this.supabaseService.getOrCreateWorkspace(workspaceFolder.name);
+
+    let organizationId: string | undefined;
+    if (gitInfo?.owner) {
+      const organization = await this.supabaseService.getOrCreateOrganization(gitInfo.owner);
+      organizationId = organization.id;
+    }
+
+    const repoOwner = gitInfo?.owner || 'local';
+    const repoName = gitInfo?.repo || workspaceFolder.name;
+    const repo = await this.supabaseService.getOrCreateRepo(workspace.id, repoName, repoOwner, organizationId);
+
+    let version = await this.supabaseService.getLatestVersion(repo.id);
+    if (!version) {
+      const commitSha = this.generateCommitSha();
+      version = await this.supabaseService.createVersion(repo.id, commitSha, gitInfo?.branch || 'main');
+      this.log(`Created new version: ${version.id}`);
+    } else {
+      this.log(`Using existing version: ${version.id}`);
+    }
+
+    // Parse and save all test files
+    const allTests: LocalTestNode[] = [];
+
+    for (const testFilePath of testFiles) {
+      const absolutePath = path.join(workspaceFolder.uri.fsPath, testFilePath);
+      const content = fs.readFileSync(absolutePath, 'utf-8');
+      
+      this.log(`Parsing: ${testFilePath}`);
+      
+      // Parse test names from the file
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const lineMatch = lines[i].match(/test\s*\(\s*['"`]([^'"`]+)['"`]/);
+        if (lineMatch) {
+          const testName = lineMatch[1];
+          allTests.push({
+            stable_id: `${testFilePath}::${testName}`,
+            name: testName,
+            description: `E2E test: ${testName}`,
+            test_type: 'e2e',
+            source_type: 'synced',
+            file_path: testFilePath,
+            start_line: i + 1,
+            runner: 'playwright',
+            command: `npx playwright test ${testFilePath} -g "${testName}"`,
+            metadata: {
+              syncedAt: new Date().toISOString()
+            }
+          });
+          this.log(`  Found test: ${testName}`);
+        }
+      }
+    }
+
+    if (allTests.length === 0) {
+      this.log('No tests found in the test files');
+      vscode.window.showWarningMessage('No test() calls found in the test files');
+      return 0;
+    }
+
+    // Save to Supabase
+    this.log(`Saving ${allTests.length} test(s) to Supabase...`);
+    await this.supabaseService.saveTestNodes(version.id, allTests);
+
+    this.log('');
+    this.log(`Successfully synced ${allTests.length} tests to Supabase`);
+    this.log('='.repeat(60));
+
+    vscode.window.showInformationMessage(`Synced ${allTests.length} tests to Supabase`);
+    return allTests.length;
+  }
 }

@@ -1,0 +1,118 @@
+{
+  "name": "monoid-visualize",
+  "displayName": "monoid-visualize",
+  "description": "Monoid's visualize extension that can convert code into nodes",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.108.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "monoid-visualize.helloWorld",
+        "title": "Hello World"
+      },
+      {
+        "command": "monoid-visualize.visualizeAllCode",
+        "title": "Visualize All Code",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "monoid-visualize.refreshGraph",
+        "title": "Refresh Graph",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "monoid-visualize.testLM",
+        "title": "Monoid: Test VS Code LM",
+        "icon": "$(beaker)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "monoid-visualize",
+          "title": "Monoid Visualize",
+          "icon": "$(graph)"
+        }
+      ]
+    },
+    "views": {
+      "monoid-visualize": [
+        {
+          "type": "webview",
+          "id": "monoid-visualize.graphView",
+          "name": "Code Graph"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "monoid-visualize.visualizeAllCode",
+          "when": "view == monoid-visualize.graphView",
+          "group": "navigation"
+        },
+        {
+          "command": "monoid-visualize.refreshGraph",
+          "when": "view == monoid-visualize.graphView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Monoid Visualize",
+      "properties": {
+        "monoid-visualize.supabaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Supabase project URL"
+        },
+        "monoid-visualize.supabaseAnonKey": {
+          "type": "string",
+          "default": "",
+          "description": "Supabase anon key"
+        },
+        "monoid-visualize.workspaceSlug": {
+          "type": "string",
+          "default": "",
+          "description": "Workspace slug for storing code graphs"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.108.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.52.0",
+    "eslint": "^9.39.2",
+    "esbuild": "^0.27.2",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.2"
+  }
+}

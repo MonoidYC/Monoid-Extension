@@ -251,10 +251,13 @@ export class TestPanelManager {
     }
     
     .toolbar-info {
+      display: inline-flex;
+      align-items: center;
       font-family: 'SF Mono', Monaco, monospace;
       font-size: 11px;
+      line-height: 1;
       color: #6b7280;
-      padding: 4px 8px;
+      padding: 6px 8px;
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid rgba(255, 255, 255, 0.05);
       border-radius: 4px;
@@ -262,20 +265,26 @@ export class TestPanelManager {
     
     .toolbar-actions {
       display: flex;
+      align-items: center;
       gap: 8px;
     }
     
     .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       padding: 6px 12px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 12px;
       font-weight: 500;
+      line-height: 1;
       color: #e5e5e5;
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 6px;
       cursor: pointer;
       transition: all 0.15s ease;
+      white-space: nowrap;
     }
     
     .btn:hover {
@@ -314,16 +323,17 @@ export class TestPanelManager {
     }
     
     .run-group {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 4px;
     }
     
     .toggle-container {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 8px;
+      padding: 6px 8px;
+      height: 30px;
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 6px;
@@ -338,6 +348,7 @@ export class TestPanelManager {
     .toggle-label {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       font-size: 11px;
+      line-height: 1;
       color: #9ca3af;
       user-select: none;
     }

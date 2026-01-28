@@ -470,7 +470,7 @@ export class CodeAnalyzer {
           file_path: filePath,
           start_line: startLine,
           end_line: endLine,
-          snippet: lines.slice(startLine - 1, Math.min(startLine + 2, endLine)).join('\n'),
+          snippet: lines.slice(startLine - 1, Math.min(startLine + 29, endLine)).join('\n'),
           signature: match[0].trim(),
           metadata: { exported: isExported }
         });
@@ -518,7 +518,7 @@ export class CodeAnalyzer {
           file_path: filePath,
           start_line: startLine,
           end_line: endLine,
-          snippet: lines.slice(startLine - 1, Math.min(startLine + 2, endLine)).join('\n'),
+          snippet: lines.slice(startLine - 1, Math.min(startLine + 29, endLine)).join('\n'),
           signature: match[0].trim(),
           metadata: { exported: isExported }
         });
@@ -546,6 +546,7 @@ export class CodeAnalyzer {
         this.log(`  ✓ Endpoint: ${name} @ ${filePath}:${startLine}`);
         this.stats.endpointsFound++;
 
+        const endLine = this.findBlockEnd(lines, startLine - 1);
         this.addNode({
           stable_id: `${filePath}::${name}`,
           name,
@@ -554,7 +555,8 @@ export class CodeAnalyzer {
           language: 'typescript',
           file_path: filePath,
           start_line: startLine,
-          end_line: startLine + 10,
+          end_line: endLine,
+          snippet: lines.slice(startLine - 1, Math.min(startLine + 29, endLine)).join('\n'),
           signature: match[0].trim(),
           metadata: { method, route }
         });
@@ -600,7 +602,7 @@ export class CodeAnalyzer {
         file_path: filePath,
         start_line: startLine,
         end_line: endLine,
-        snippet: lines.slice(startLine - 1, Math.min(startLine + 4, endLine)).join('\n'),
+        snippet: lines.slice(startLine - 1, Math.min(startLine + 29, endLine)).join('\n'),
         signature: match[0].trim(),
         metadata: { extends: extendsClass, exported: isExported }
       });
@@ -665,7 +667,7 @@ export class CodeAnalyzer {
           file_path: filePath,
           start_line: startLine,
           end_line: endLine,
-          snippet: lines.slice(startLine - 1, Math.min(startLine + 2, endLine)).join('\n'),
+          snippet: lines.slice(startLine - 1, Math.min(startLine + 29, endLine)).join('\n'),
           signature: match[0].trim(),
           metadata: { exported: true }
         });

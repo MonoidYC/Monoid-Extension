@@ -118,6 +118,7 @@ export interface TestStatusUpdate {
   last_run_at: string;
   last_duration_ms?: number;
   last_error?: string | null;
+  last_ran_video?: string | null;
 }
 
 /**
@@ -141,4 +142,25 @@ export interface TestGenerationContext {
   components?: string[];
   endpoints?: string[];
   dataTestIds?: string[];
+  // New fields for code_node-based generation
+  codeNode?: CodeNodeForTestGen;
+  relatedNodes?: CodeNodeForTestGen[];
+  endpointNodes?: CodeNodeForTestGen[];
+}
+
+/**
+ * Code node with full details for test generation
+ */
+export interface CodeNodeForTestGen {
+  id: string;
+  stable_id: string;
+  name: string;
+  node_type: string;
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  snippet?: string;
+  signature?: string;
+  summary?: string;
+  metadata?: Record<string, unknown>;
 }

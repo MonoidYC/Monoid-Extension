@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { LocalNode, LocalEdge, CodeNode, CodeEdge, Workspace, Repo, RepoVersion, GraphData, GraphNode, GraphEdge } from '../types';
-import { LocalTestNode, LocalTestCoverageEdge, TestNode, TestStatusUpdate } from '../testing/types';
+import { LocalTestNode, LocalTestCoverageEdge, TestNode, TestStatusUpdate, CodeNodeForTestGen } from '../testing/types';
 import * as path from 'path';
+import * as fs from 'fs';
 
 // Default values - can be overridden via settings
 const DEFAULT_SUPABASE_URL = 'https://xfvxcufvhndwgkkfilaa.supabase.co';
@@ -789,5 +790,220 @@ export class SupabaseService {
     });
 
     return stableIdToId;
+  }
+
+  /**
+   * Get code nodes by type for a version (for test generation)
+   */
+  async getCodeNodesByType(versionId: string, nodeTypes: string[]): Promise<CodeNodeForTestGen[]> {
+    const client = this.getClient();
+
+    const { data, error } = await client
+      .from('code_nodes')
+      .select('id, stable_id, name, node_type, file_path, start_line, end_line, snippet, signature, summary, metadata')
+      .eq('version_id', versionId)
+      .in('node_type', nodeTypes)
+      .order('file_path', { ascending: true });
+
+    if (error) {
+      throw new Error(`Failed to fetch code nodes by type: ${error.message}`);
+    }
+
+    return (data || []) as CodeNodeForTestGen[];
+  }
+
+  /**
+   * Get all code nodes for a version that could be related to a specific file
+   * (useful for finding dependencies/imports)
+   */
+  async getRelatedCodeNodes(versionId: string, filePath: string): Promise<CodeNodeForTestGen[]> {
+    const client = this.getClient();
+
+    // Get all nodes from the same file
+    const { data: sameFileNodes, error: sameFileError } = await client
+      .from('code_nodes')
+      .select('id, stable_id, name, node_type, file_path, start_line, end_line, snippet, signature, summary, metadata')
+      .eq('version_id', versionId)
+      .eq('file_path', filePath);
+
+    if (sameFileError) {
+      throw new Error(`Failed to fetch related code nodes: ${sameFileError.message}`);
+    }
+
+    // Get edges where source is from this file to find dependencies
+    const nodeIds = (sameFileNodes || []).map(n => n.id);
+    
+    if (nodeIds.length === 0) {
+      return sameFileNodes || [];
+    }
+
+    const { data: edges, error: edgesError } = await client
+      .from('code_edges')
+      .select('target_node_id')
+      .eq('version_id', versionId)
+      .in('source_node_id', nodeIds)
+      .in('edge_type', ['imports', 'uses', 'calls']);
+
+    if (edgesError) {
+      return sameFileNodes || [];
+    }
+
+    const targetIds = (edges || []).map(e => e.target_node_id);
+    
+    if (targetIds.length === 0) {
+      return sameFileNodes || [];
+    }
+
+    // Fetch the target nodes (dependencies)
+    const { data: depNodes, error: depError } = await client
+      .from('code_nodes')
+      .select('id, stable_id, name, node_type, file_path, start_line, end_line, snippet, signature, summary, metadata')
+      .in('id', targetIds);
+
+    if (depError) {
+      return sameFileNodes || [];
+    }
+
+    return [...(sameFileNodes || []), ...(depNodes || [])];
+  }
+
+  /**
+   * Get endpoints that a component might call (based on code edges)
+   */
+  async getEndpointsForComponent(versionId: string, componentNodeId: string): Promise<CodeNodeForTestGen[]> {
+    const client = this.getClient();
+
+    // Get edges from this component
+    const { data: edges, error: edgesError } = await client
+      .from('code_edges')
+      .select('target_node_id')
+      .eq('version_id', versionId)
+      .eq('source_node_id', componentNodeId)
+      .in('edge_type', ['calls', 'uses', 'routes_to']);
+
+    if (edgesError || !edges || edges.length === 0) {
+      return [];
+    }
+
+    const targetIds = edges.map(e => e.target_node_id);
+
+    // Fetch the endpoint nodes
+    const { data: endpoints, error: endpointError } = await client
+      .from('code_nodes')
+      .select('id, stable_id, name, node_type, file_path, start_line, end_line, snippet, signature, summary, metadata')
+      .in('id', targetIds)
+      .eq('node_type', 'endpoint');
+
+    if (endpointError) {
+      return [];
+    }
+
+    return (endpoints || []) as CodeNodeForTestGen[];
+  }
+
+  // ==================== Storage Methods ====================
+
+  /**
+   * Upload a test video file to Supabase Storage
+   * Returns the public URL of the uploaded video
+   */
+  async uploadTestVideo(
+    videoFilePath: string,
+    repoOwner: string,
+    repoName: string,
+    testStableId: string
+  ): Promise<string | null> {
+    const client = this.getClient();
+    
+    try {
+      // Check if file exists
+      if (!fs.existsSync(videoFilePath)) {
+        console.log(`[Supabase Storage] Video file not found: ${videoFilePath}`);
+        return null;
+      }
+
+      // Read file content
+      const fileBuffer = fs.readFileSync(videoFilePath);
+      
+      // Generate a unique path for the video
+      // Format: {repoOwner}/{repoName}/{testStableId}/{timestamp}.webm
+      const timestamp = Date.now();
+      const fileExtension = path.extname(videoFilePath) || '.webm';
+      const sanitizedStableId = testStableId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const storagePath = `${repoOwner}/${repoName}/${sanitizedStableId}/${timestamp}${fileExtension}`;
+
+      console.log(`[Supabase Storage] Uploading video to: ${storagePath}`);
+
+      // Upload to storage
+      const { data, error } = await client.storage
+        .from('test-videos')
+        .upload(storagePath, fileBuffer, {
+          contentType: fileExtension === '.mp4' ? 'video/mp4' : 'video/webm',
+          upsert: true
+        });
+
+      if (error) {
+        console.error(`[Supabase Storage] Upload failed: ${error.message}`);
+        return null;
+      }
+
+      // Get public URL
+      const { data: urlData } = client.storage
+        .from('test-videos')
+        .getPublicUrl(storagePath);
+
+      console.log(`[Supabase Storage] Upload successful. Public URL: ${urlData.publicUrl}`);
+      return urlData.publicUrl;
+
+    } catch (err: any) {
+      console.error(`[Supabase Storage] Error uploading video: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Delete old test videos for a specific test to save storage space
+   * Keeps only the most recent video
+   */
+  async cleanupOldTestVideos(
+    repoOwner: string,
+    repoName: string,
+    testStableId: string,
+    keepCount: number = 1
+  ): Promise<void> {
+    const client = this.getClient();
+    
+    try {
+      const sanitizedStableId = testStableId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const folderPath = `${repoOwner}/${repoName}/${sanitizedStableId}`;
+
+      // List files in the test's folder
+      const { data: files, error: listError } = await client.storage
+        .from('test-videos')
+        .list(folderPath, {
+          sortBy: { column: 'created_at', order: 'desc' }
+        });
+
+      if (listError || !files || files.length <= keepCount) {
+        return; // No cleanup needed
+      }
+
+      // Delete all but the most recent videos
+      const filesToDelete = files.slice(keepCount).map(f => `${folderPath}/${f.name}`);
+      
+      if (filesToDelete.length > 0) {
+        const { error: deleteError } = await client.storage
+          .from('test-videos')
+          .remove(filesToDelete);
+
+        if (deleteError) {
+          console.error(`[Supabase Storage] Failed to cleanup old videos: ${deleteError.message}`);
+        } else {
+          console.log(`[Supabase Storage] Cleaned up ${filesToDelete.length} old video(s)`);
+        }
+      }
+    } catch (err: any) {
+      console.error(`[Supabase Storage] Error cleaning up videos: ${err.message}`);
+    }
   }
 }

@@ -18,6 +18,7 @@ interface PlaywrightTestResultEntry {
   duration: number;
   error?: { message: string; stack?: string };
   errors?: Array<{ message: string }>;
+  video?: string | { path: string };
 }
 
 interface PlaywrightTest {
@@ -50,6 +51,7 @@ interface ParsedTestResult {
   duration: number;
   errors?: Array<{ message: string }>;
   filePath: string;
+  videoPath?: string;
 }
 
 /**
@@ -251,6 +253,9 @@ export class TestRunner {
       fs.mkdirSync(resultsDir, { recursive: true });
     }
 
+    // Ensure playwright config has video settings
+    await this.ensurePlaywrightConfig(workspacePath, config.get<string>('testVideoMode') || 'retain-on-failure');
+
     // Build args
     const args = ['playwright', 'test', testDir, '--reporter=list', '--reporter=json'];
     if (headed) {
@@ -372,6 +377,10 @@ export class TestRunner {
       fs.mkdirSync(resultsDir, { recursive: true });
     }
 
+    // Ensure playwright config has video settings
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    await this.ensurePlaywrightConfig(workspacePath, config.get<string>('testVideoMode') || 'retain-on-failure');
+
     // Build args
     const args = ['playwright', 'test', filePath, '--reporter=list', '--reporter=json'];
     if (headed) {
@@ -429,6 +438,10 @@ export class TestRunner {
     if (!fs.existsSync(resultsDir)) {
       fs.mkdirSync(resultsDir, { recursive: true });
     }
+
+    // Ensure playwright config has video settings
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    await this.ensurePlaywrightConfig(workspacePath, config.get<string>('testVideoMode') || 'retain-on-failure');
 
     // Build args with grep to filter specific test
     const escapedTestName = testName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -558,6 +571,124 @@ export class TestRunner {
   }
 
   /**
+   * Ensure playwright.config.ts exists with video settings
+   */
+  private async ensurePlaywrightConfig(workspacePath: string, videoMode: string): Promise<void> {
+    const configPath = path.join(workspacePath, 'playwright.config.ts');
+    const configPathJs = path.join(workspacePath, 'playwright.config.js');
+    const configPathMjs = path.join(workspacePath, 'playwright.config.mjs');
+
+    // Check which config file exists
+    let configFile = '';
+    if (fs.existsSync(configPath)) {
+      configFile = configPath;
+    } else if (fs.existsSync(configPathJs)) {
+      configFile = configPathJs;
+    } else if (fs.existsSync(configPathMjs)) {
+      configFile = configPathMjs;
+    }
+
+    // Map video mode to Playwright's use.video option
+    const videoValue = videoMode === 'off' ? 'off' : 
+                       videoMode === 'on' ? 'on' :
+                       videoMode === 'retain-on-failure' ? 'retain-on-failure' :
+                       videoMode === 'on-first-retry' ? 'on-first-retry' : 'retain-on-failure';
+
+    if (configFile) {
+      // Update existing config file
+      try {
+        let content = fs.readFileSync(configFile, 'utf-8');
+        
+        // Check if video is already configured
+        if (content.includes('use:') && content.includes('video:')) {
+          // Update existing video setting
+          const videoRegex = /video:\s*['"`](on|off|retain-on-failure|on-first-retry)['"`]/;
+          if (videoRegex.test(content)) {
+            content = content.replace(videoRegex, `video: '${videoValue}'`);
+          } else {
+            // Add video to existing use block
+            content = content.replace(
+              /(use:\s*\{[^}]*?)(\})/,
+              `$1    video: '${videoValue}',\n  $2`
+            );
+          }
+        } else if (content.includes('use:')) {
+          // Add video to existing use block
+          content = content.replace(
+            /(use:\s*\{[^}]*?)(\})/,
+            `$1    video: '${videoValue}',\n  $2`
+          );
+        } else {
+          // Add use block with video
+          if (content.includes('export default')) {
+            content = content.replace(
+              /(export default[^;]*?)(\})/,
+              `$1  use: {\n    video: '${videoValue}',\n  },\n$2`
+            );
+          }
+        }
+
+        fs.writeFileSync(configFile, content, 'utf-8');
+        this.log(`Updated ${configFile} with video setting: ${videoValue}`);
+      } catch (error: any) {
+        this.log(`Warning: Could not update ${configFile}: ${error.message}`);
+      }
+    } else {
+      // Create a basic playwright.config.ts file
+      const defaultConfig = `import { defineConfig, devices } from '@playwright/test';
+
+/**
+ * See https://playwright.dev/docs/test-configuration.
+ */
+export default defineConfig({
+  testDir: './e2e',
+  /* Run tests in files in parallel */
+  fullyParallel: true,
+  /* Fail the build on CI if you accidentally left test.only in the source code. */
+  forbidOnly: !!process.env.CI,
+  /* Retry on CI only */
+  retries: process.env.CI ? 2 : 0,
+  /* Opt out of parallel tests on CI. */
+  workers: process.env.CI ? 1 : undefined,
+  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
+  reporter: 'html',
+  /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
+  use: {
+    /* Base URL to use in actions like \`await page.goto('/')\`. */
+    // baseURL: 'http://127.0.0.1:3000',
+
+    /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
+    trace: 'on-first-retry',
+    video: '${videoValue}',
+  },
+
+  /* Configure projects for major browsers */
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
+
+  /* Run your local dev server before starting the tests */
+  // webServer: {
+  //   command: 'npm run start',
+  //   url: 'http://127.0.0.1:3000',
+  //   reuseExistingServer: !process.env.CI,
+  // },
+});
+`;
+
+      try {
+        fs.writeFileSync(configPath, defaultConfig, 'utf-8');
+        this.log(`Created ${configPath} with video setting: ${videoValue}`);
+      } catch (error: any) {
+        this.log(`Warning: Could not create ${configPath}: ${error.message}`);
+      }
+    }
+  }
+
+  /**
    * Open Playwright UI mode
    */
   async openUIMode(): Promise<void> {
@@ -662,10 +793,17 @@ export class TestRunner {
         this.log(`[ParseResults] Test: "${result.title}" in ${result.filePath} -> ${result.status}`);
       }
 
-      // Get version ID for Supabase updates
+      // Get version ID and repo info for Supabase updates
       this.log(`[ParseResults] Getting version ID for Supabase...`);
       const versionId = await this.getVersionId(workspacePath);
       this.log(`[ParseResults] Version ID: ${versionId || 'NOT FOUND'}`);
+
+      // Get repo info for video uploads
+      const gitInfo = await getGitHubInfoFromGit(workspacePath);
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      const repoOwner = gitInfo?.owner || 'local';
+      const repoName = gitInfo?.repo || workspaceFolder?.name || 'unknown';
+      this.log(`[ParseResults] Repo: ${repoOwner}/${repoName}`);
 
       if (!versionId) {
         this.log(`[ParseResults] WARNING: No version ID found, skipping Supabase updates`);
@@ -678,9 +816,9 @@ export class TestRunner {
         // Update tree view
         this.treeProvider.updateTestStatus(result.filePath, result.title, status);
 
-        // Update Supabase if we have version ID
+        // Update Supabase if we have version ID (includes video upload)
         if (versionId) {
-          await this.updateTestInSupabase(versionId, result);
+          await this.updateTestInSupabase(versionId, result, workspacePath, repoOwner, repoName);
         }
       }
 
@@ -691,15 +829,36 @@ export class TestRunner {
       const passed = testResults.filter(t => t.status === 'passed').length;
       const failed = testResults.filter(t => t.status === 'failed').length;
       const skipped = testResults.filter(t => t.status === 'skipped').length;
+      const videosAvailable = testResults.filter(t => t.videoPath).length;
 
       if (failed > 0) {
-        vscode.window.showWarningMessage(
-          `Tests completed: ${passed} passed, ${failed} failed, ${skipped} skipped`
+        const actions = ['Insert Results into Chat'];
+        if (videosAvailable > 0) {
+          actions.push('View Videos');
+        }
+        const action = await vscode.window.showWarningMessage(
+          `Tests completed: ${passed} passed, ${failed} failed, ${skipped} skipped${videosAvailable > 0 ? ` (${videosAvailable} video${videosAvailable > 1 ? 's' : ''} available)` : ''}`,
+          ...actions
         );
+        if (action === 'Insert Results into Chat') {
+          await this.insertResultsIntoChat(resultsFile);
+        } else if (action === 'View Videos') {
+          await this.showTestVideos(testResults, workspacePath);
+        }
       } else if (passed > 0 || skipped > 0) {
-        vscode.window.showInformationMessage(
-          `Tests completed: ${passed} passed, ${skipped} skipped`
+        const actions = ['Insert Results into Chat'];
+        if (videosAvailable > 0) {
+          actions.push('View Videos');
+        }
+        const action = await vscode.window.showInformationMessage(
+          `Tests completed: ${passed} passed, ${skipped} skipped${videosAvailable > 0 ? ` (${videosAvailable} video${videosAvailable > 1 ? 's' : ''} available)` : ''}`,
+          ...actions
         );
+        if (action === 'Insert Results into Chat') {
+          await this.insertResultsIntoChat(resultsFile);
+        } else if (action === 'View Videos') {
+          await this.showTestVideos(testResults, workspacePath);
+        }
       }
 
       this.log(`[ParseResults] Final results: ${passed} passed, ${failed} failed, ${skipped} skipped`);
@@ -724,6 +883,10 @@ export class TestRunner {
     workspacePath: string,
     results: ParsedTestResult[] = []
   ): ParsedTestResult[] {
+    // Get the configured test directory
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    const testDir = config.get<string>('testOutputDir') || 'e2e';
+    
     for (const suite of suites) {
       // Process specs in this suite
       for (const spec of suite.specs || []) {
@@ -740,6 +903,25 @@ export class TestRunner {
           if (filePath.startsWith('./')) {
             filePath = filePath.slice(2);
           }
+          
+          // If the file path is just a filename (no directory), prepend the test directory
+          // This handles cases where Playwright returns just "page.spec.ts" instead of "e2e/page.spec.ts"
+          if (!filePath.includes('/') && !filePath.includes('\\')) {
+            filePath = `${testDir}/${filePath}`;
+          }
+          // Also handle case where path doesn't start with test directory but should
+          else if (!filePath.startsWith(testDir + '/') && !filePath.startsWith(testDir + '\\')) {
+            // Check if it's a .spec.ts file that should be in the test directory
+            if (filePath.includes('.spec.ts') || filePath.includes('.spec.js')) {
+              // Check if file exists in test directory
+              const fullPathWithTestDir = path.join(workspacePath, testDir, filePath);
+              const fullPathWithoutTestDir = path.join(workspacePath, filePath);
+              
+              if (fs.existsSync(fullPathWithTestDir) && !fs.existsSync(fullPathWithoutTestDir)) {
+                filePath = `${testDir}/${filePath}`;
+              }
+            }
+          }
         }
         
         this.log(`[ExtractResults] File: ${spec.file} -> normalized: ${filePath}`);
@@ -751,23 +933,47 @@ export class TestRunner {
           const status = lastResult?.status || 'pending';
           const duration = lastResult?.duration || 0;
           
-          // Collect errors from the result
+          // Collect errors from the result and strip ANSI codes
           const errors: Array<{ message: string }> = [];
           if (lastResult?.error) {
-            errors.push({ message: lastResult.error.message || lastResult.error.stack || 'Unknown error' });
+            const errorMsg = lastResult.error.message || lastResult.error.stack || 'Unknown error';
+            errors.push({ message: this.stripAnsiCodes(errorMsg) });
           }
           if (lastResult?.errors) {
-            errors.push(...lastResult.errors);
+            errors.push(...lastResult.errors.map(e => ({ message: this.stripAnsiCodes(e.message) })));
           }
           
-          this.log(`[ExtractResults] Test: "${test.title}" status: ${status}, duration: ${duration}ms`);
+          // Extract video path - first try from JSON report, then search test-results directory
+          let videoPath: string | undefined;
+          if (lastResult?.video) {
+            // Playwright video path can be in different formats
+            const video = lastResult.video;
+            if (typeof video === 'string') {
+              videoPath = video;
+            } else if (video && typeof video === 'object' && 'path' in video) {
+              videoPath = (video as any).path;
+            }
+            
+            // Make path relative to workspace if it's absolute
+            if (videoPath && path.isAbsolute(videoPath)) {
+              videoPath = path.relative(workspacePath, videoPath);
+            }
+          }
+          
+          // If no video in JSON report, search for it in test-results directory
+          if (!videoPath) {
+            videoPath = this.findVideoForTest(workspacePath, test.title || spec.title, filePath);
+          }
+          
+          this.log(`[ExtractResults] Test: "${test.title}" status: ${status}, duration: ${duration}ms, video: ${videoPath || 'none'}`);
           
           results.push({
             title: test.title || spec.title,
             status,
             duration,
             errors: errors.length > 0 ? errors : undefined,
-            filePath
+            filePath,
+            videoPath
           });
         }
       }
@@ -797,6 +1003,93 @@ export class TestRunner {
       default:
         return 'pending';
     }
+  }
+
+  /**
+   * Strip ANSI escape codes from a string
+   */
+  private stripAnsiCodes(str: string): string {
+    return str.replace(/\u001b\[[0-9;]*m/g, '').replace(/\x1b\[[0-9;]*m/g, '');
+  }
+
+  /**
+   * Find video file for a test in the test-results directory
+   * Videos are stored as: test-results/{file}-{describe}-{test}-{browser}/video.webm
+   * e.g., test-results/products-Products-Page-should-clear-filters-chromium/video.webm
+   */
+  private findVideoForTest(workspacePath: string, testTitle: string, filePath: string): string | undefined {
+    const resultsDir = path.join(workspacePath, 'test-results');
+    
+    if (!fs.existsSync(resultsDir)) {
+      this.log(`[FindVideo] Results directory not found: ${resultsDir}`);
+      return undefined;
+    }
+
+    // List all directories in test-results
+    const entries = fs.readdirSync(resultsDir, { withFileTypes: true });
+    const testDirs = entries.filter(e => e.isDirectory());
+    
+    this.log(`[FindVideo] Looking for video for test: "${testTitle}" in ${filePath}`);
+    this.log(`[FindVideo] Found ${testDirs.length} test result directories`);
+
+    // Build patterns to match against directory names
+    // Playwright creates directories like: products-Products-Page-should-clear-filters-chromium
+    const fileBaseName = path.basename(filePath, path.extname(filePath))
+      .replace('.spec', '')
+      .replace(/\./g, '-')
+      .toLowerCase();
+    
+    // Normalize test title to match directory naming: "should clear filters" -> "should-clear-filters"
+    const testTitleNormalized = testTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    
+    this.log(`[FindVideo] Searching for fileBase="${fileBaseName}" and testTitle="${testTitleNormalized}"`);
+
+    // Score each directory to find the best match
+    let bestMatch: { dir: string; score: number } | null = null;
+
+    for (const dir of testDirs) {
+      const dirNameLower = dir.name.toLowerCase();
+      let score = 0;
+      
+      // Check if directory starts with the file base name
+      if (dirNameLower.startsWith(fileBaseName + '-')) {
+        score += 10;
+      } else if (dirNameLower.includes(fileBaseName)) {
+        score += 5;
+      }
+      
+      // Check for test title words in the directory name
+      const testWords = testTitle.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const matchingWords = testWords.filter(word => dirNameLower.includes(word));
+      score += matchingWords.length * 2;
+      
+      // Bonus for matching the full normalized test title
+      if (dirNameLower.includes(testTitleNormalized)) {
+        score += 20;
+      }
+      
+      // Only consider directories with video.webm
+      if (score > 0) {
+        const videoPath = path.join(resultsDir, dir.name, 'video.webm');
+        if (fs.existsSync(videoPath)) {
+          this.log(`[FindVideo] Candidate: ${dir.name} (score: ${score})`);
+          if (!bestMatch || score > bestMatch.score) {
+            bestMatch = { dir: dir.name, score };
+          }
+        }
+      }
+    }
+
+    if (bestMatch) {
+      const videoPath = path.join(resultsDir, bestMatch.dir, 'video.webm');
+      const relativePath = path.relative(workspacePath, videoPath);
+      this.log(`[FindVideo] Best match: ${bestMatch.dir} (score: ${bestMatch.score})`);
+      this.log(`[FindVideo] Video path: ${relativePath}`);
+      return relativePath;
+    }
+
+    this.log(`[FindVideo] No video found for test: "${testTitle}"`);
+    return undefined;
   }
 
   /**
@@ -851,7 +1144,10 @@ export class TestRunner {
    */
   private async updateTestInSupabase(
     versionId: string,
-    result: ParsedTestResult
+    result: ParsedTestResult,
+    workspacePath: string,
+    repoOwner: string,
+    repoName: string
   ): Promise<void> {
     try {
       const stableId = `${result.filePath}::${result.title}`;
@@ -866,14 +1162,70 @@ export class TestRunner {
         const status = this.mapPlaywrightStatus(result.status);
         const errorMessage = result.errors?.map(e => e.message).join('\n') || null;
 
+        // Strip ANSI codes from error message for cleaner logs
+        const cleanErrorMessage = errorMessage ? this.stripAnsiCodes(errorMessage) : null;
+
         const statusUpdate: TestStatusUpdate = {
           last_status: status,
           last_run_at: new Date().toISOString(),
           last_duration_ms: result.duration,
-          last_error: errorMessage
+          last_error: cleanErrorMessage,
+          last_ran_video: null
         };
 
-        this.log(`[UpdateSupabase] Updating status to: ${JSON.stringify(statusUpdate)}`);
+        // Upload video if available
+        this.log(`[UpdateSupabase] Video path from results: ${result.videoPath || 'none'}`);
+        
+        if (result.videoPath) {
+          const absoluteVideoPath = path.isAbsolute(result.videoPath) 
+            ? result.videoPath 
+            : path.join(workspacePath, result.videoPath);
+          
+          this.log(`[UpdateSupabase] Checking video file exists: ${absoluteVideoPath}`);
+          
+          if (fs.existsSync(absoluteVideoPath)) {
+            const stats = fs.statSync(absoluteVideoPath);
+            this.log(`[UpdateSupabase] Video file found, size: ${(stats.size / 1024).toFixed(2)} KB`);
+            this.log(`[UpdateSupabase] Uploading video to Supabase Storage...`);
+            
+            const videoUrl = await this.supabaseService.uploadTestVideo(
+              absoluteVideoPath,
+              repoOwner,
+              repoName,
+              stableId
+            );
+            
+            if (videoUrl) {
+              statusUpdate.last_ran_video = videoUrl;
+              this.log(`[UpdateSupabase] Video uploaded successfully!`);
+              this.log(`[UpdateSupabase] Video URL: ${videoUrl}`);
+              
+              // Cleanup old videos in Supabase (keep only the most recent one)
+              await this.supabaseService.cleanupOldTestVideos(repoOwner, repoName, stableId, 1);
+              
+              // Delete local video file to save storage
+              try {
+                fs.unlinkSync(absoluteVideoPath);
+                this.log(`[UpdateSupabase] Deleted local video file: ${absoluteVideoPath}`);
+              } catch (deleteErr: any) {
+                this.log(`[UpdateSupabase] Warning: Could not delete local video: ${deleteErr.message}`);
+              }
+            } else {
+              this.log(`[UpdateSupabase] Video upload failed - check Supabase Storage logs`);
+            }
+          } else {
+            this.log(`[UpdateSupabase] Video file NOT found at: ${absoluteVideoPath}`);
+          }
+        } else {
+          this.log(`[UpdateSupabase] No video available for this test`);
+        }
+
+        // Log the update (truncate error for readability)
+        const logUpdate = {
+          ...statusUpdate,
+          last_error: cleanErrorMessage ? `${cleanErrorMessage.substring(0, 100)}...` : null
+        };
+        this.log(`[UpdateSupabase] Updating test node with: ${JSON.stringify(logUpdate)}`);
         await this.supabaseService.updateTestStatus(testNode.id, statusUpdate);
         this.log(`[UpdateSupabase] SUCCESS: ${result.title} -> ${status}`);
       } else {
@@ -884,6 +1236,129 @@ export class TestRunner {
       this.log(`[UpdateSupabase] ERROR: ${error.message}`);
       if (error.stack) {
         this.log(`[UpdateSupabase] Stack: ${error.stack}`);
+      }
+    }
+  }
+
+  /**
+   * Insert test results into VS Code Chat window
+   */
+  private async insertResultsIntoChat(resultsFile: string): Promise<void> {
+    try {
+      if (!fs.existsSync(resultsFile)) {
+        vscode.window.showErrorMessage(`Results file not found: ${resultsFile}`);
+        return;
+      }
+
+      // Read the results.json file
+      const resultsContent = fs.readFileSync(resultsFile, 'utf-8');
+      let resultsData: any;
+      
+      try {
+        resultsData = JSON.parse(resultsContent);
+      } catch (parseError) {
+        vscode.window.showErrorMessage(`Failed to parse results.json: ${parseError}`);
+        return;
+      }
+
+      // Format the results for chat
+      const formattedMessage = this.formatResultsForChat(resultsData);
+
+      // Copy to clipboard
+      await vscode.env.clipboard.writeText(formattedMessage);
+
+      // Try to use chat API if available (VS Code 1.85+)
+      try {
+        // Check if chat namespace exists and has the method
+        const vscodeAny = vscode as any;
+        if (vscodeAny.chat && typeof vscodeAny.chat.requestChatAccess === 'function') {
+          const chatAccess = await vscodeAny.chat.requestChatAccess('copilot');
+          if (chatAccess && typeof chatAccess.addRequest === 'function') {
+            await chatAccess.addRequest(
+              formattedMessage,
+              {
+                command: 'inline',
+                references: []
+              }
+            );
+            vscode.window.showInformationMessage('Test results inserted into Chat');
+            return;
+          }
+        }
+      } catch (chatError: any) {
+        this.log(`Chat API not available or failed: ${chatError.message}`);
+      }
+
+      // Fallback: Open chat and show message
+      await vscode.commands.executeCommand('workbench.action.chat.open');
+      
+      // Small delay to ensure chat is open
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      vscode.window.showInformationMessage(
+        'Test results copied to clipboard. The Chat window is open - paste (Cmd+V / Ctrl+V) to insert the results.'
+      );
+    } catch (error: any) {
+      this.log(`Error inserting results into chat: ${error.message}`);
+      vscode.window.showErrorMessage(`Failed to insert results into chat: ${error.message}`);
+    }
+  }
+
+  /**
+   * Format test results for chat message
+   */
+  private formatResultsForChat(resultsData: any): string {
+    const message = `Here are my Playwright test results. Please analyze the failures and help me fix them:
+
+\`\`\`json
+${JSON.stringify(resultsData, null, 2)}
+\`\`\`
+
+Please:
+1. Identify which tests failed and why
+2. Suggest fixes for the failing tests
+3. Explain any patterns or common issues you notice`;
+
+    return message;
+  }
+
+  /**
+   * Show test videos in a quick pick menu
+   */
+  private async showTestVideos(testResults: ParsedTestResult[], workspacePath: string): Promise<void> {
+    const videos = testResults.filter(t => t.videoPath);
+    
+    if (videos.length === 0) {
+      vscode.window.showInformationMessage('No test videos available');
+      return;
+    }
+
+    // Create quick pick items
+    const items: vscode.QuickPickItem[] = videos.map(result => ({
+      label: `$(play) ${result.title}`,
+      description: `${result.filePath} - ${result.status}`,
+      detail: result.videoPath,
+      alwaysShow: true
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+      placeHolder: `Select a test video to open (${videos.length} available)`,
+      canPickMany: false
+    });
+
+    if (selected && selected.detail) {
+      const videoPath = path.isAbsolute(selected.detail) 
+        ? selected.detail 
+        : path.join(workspacePath, selected.detail);
+      
+      if (fs.existsSync(videoPath)) {
+        // Open video file in default application
+        const uri = vscode.Uri.file(videoPath);
+        await vscode.commands.executeCommand('vscode.open', uri);
+        this.log(`Opened video: ${videoPath}`);
+      } else {
+        vscode.window.showErrorMessage(`Video file not found: ${videoPath}`);
+        this.log(`Video file not found: ${videoPath}`);
       }
     }
   }

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as https from 'https';
 import { LocalNode, LocalEdge } from '../types';
 
 /**
@@ -6,7 +7,7 @@ import { LocalNode, LocalEdge } from '../types';
  * 
  * Strategy:
  * 1. Run heuristics to generate initial API call guesses
- * 2. Send guesses + code + all endpoints to LLM
+ * 2. Send guesses + code + all endpoints to LLM (Gemini)
  * 3. LLM validates guesses AND discovers additional calls heuristics missed
  * 4. If LLM fails, the entire edge detection fails (no silent fallback)
  */
@@ -129,7 +130,7 @@ export class LLMAnalyzer {
   }
 
   /**
-   * Use LLM to validate guesses AND discover additional API calls
+   * Use Gemini to validate guesses AND discover additional API calls
    */
   private async analyzeWithLLM(
     guesses: GuessedApiCall[],
@@ -137,19 +138,15 @@ export class LLMAnalyzer {
     endpoints: LocalNode[],
     workspaceFolder: vscode.WorkspaceFolder
   ): Promise<LocalEdge[]> {
-    // Get gpt-4o-mini model
-    let models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o-mini' });
-    
-    if (models.length === 0) {
-      // Fallback to any copilot model
-      models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-      if (models.length === 0) {
-        throw new Error('No language models available. Make sure GitHub Copilot is installed and signed in.');
-      }
+    const config = vscode.workspace.getConfiguration('monoid-visualize');
+    const apiKey = config.get<string>('geminiApiKey');
+    const model = config.get<string>('geminiModel') || 'gemini-3-flash-preview';
+
+    if (!apiKey) {
+      throw new Error('Gemini API key not configured. Go to Settings and set monoid-visualize.geminiApiKey');
     }
 
-    const model = models[0];
-    this.log(`  Using model: ${model.id}`);
+    this.log(`  Using Gemini model: ${model}`);
     
     const edges: LocalEdge[] = [];
     const endpointMap = new Map(endpoints.map(e => [e.name, e]));
@@ -213,14 +210,8 @@ Respond with JSON only:
 
 Only include endpoints from the available list above. Use "source": "heuristic" for validating guesses, "source": "discovered" for new finds.`;
 
-        const messages = [vscode.LanguageModelChatMessage.User(prompt)];
-        const response = await model.sendRequest(messages, {}, new vscode.CancellationTokenSource().token);
-
-        // Collect response
-        let responseText = '';
-        for await (const chunk of response.text) {
-          responseText += chunk;
-        }
+        // Call Gemini API
+        const responseText = await this.callGeminiAPI(apiKey, model, prompt);
 
         // Parse response
         const jsonMatch = responseText.match(/\{[\s\S]*"apiCalls"[\s\S]*\}/);
@@ -259,6 +250,72 @@ Only include endpoints from the available list above. Use "source": "heuristic" 
     }
 
     return edges;
+  }
+
+  /**
+   * Call Google Gemini API
+   */
+  private callGeminiAPI(apiKey: string, model: string, prompt: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      
+      const requestBody = JSON.stringify({
+        contents: [{
+          parts: [{
+            text: prompt
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 2048
+        }
+      });
+
+      const urlObj = new URL(url);
+      const options = {
+        hostname: urlObj.hostname,
+        path: urlObj.pathname + urlObj.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(requestBody)
+        }
+      };
+
+      const req = https.request(options, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+
+        res.on('end', () => {
+          try {
+            const response = JSON.parse(data);
+            
+            if (response.error) {
+              reject(new Error(`Gemini API error: ${response.error.message}`));
+              return;
+            }
+
+            if (response.candidates && response.candidates[0]?.content?.parts?.[0]?.text) {
+              resolve(response.candidates[0].content.parts[0].text);
+            } else {
+              reject(new Error('Unexpected response structure from Gemini'));
+            }
+          } catch (e: any) {
+            reject(new Error(`Failed to parse Gemini response: ${e.message}`));
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        reject(new Error(`Gemini request failed: ${e.message}`));
+      });
+
+      req.write(requestBody);
+      req.end();
+    });
   }
 
   private extractApiPaths(code: string): Array<{ path: string; method: string }> {
@@ -373,96 +430,111 @@ Only include endpoints from the available list above. Use "source": "heuristic" 
 }
 
 /**
- * Test command to debug VS Code Language Model availability
+ * Test command to debug Gemini API availability
  */
 export async function testVSCodeLM(): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel('Monoid LM Test');
   outputChannel.show(true);
   
   outputChannel.appendLine('='.repeat(60));
-  outputChannel.appendLine('Testing VS Code Language Model API');
+  outputChannel.appendLine('Testing Gemini API Configuration');
   outputChannel.appendLine('='.repeat(60));
   outputChannel.appendLine('');
 
-  // Check if the API is available
-  outputChannel.appendLine('1. Checking if vscode.lm API exists...');
-  if (!vscode.lm) {
-    outputChannel.appendLine('   ❌ vscode.lm is undefined - Language Model API not available');
-    outputChannel.appendLine('   This usually means VS Code version is too old or Copilot is not installed');
+  const config = vscode.workspace.getConfiguration('monoid-visualize');
+  const apiKey = config.get<string>('geminiApiKey');
+  const model = config.get<string>('geminiModel') || 'gemini-3-flash-preview';
+
+  // Check if API key is configured
+  outputChannel.appendLine('1. Checking Gemini API key...');
+  if (!apiKey) {
+    outputChannel.appendLine('   ❌ Gemini API key not configured');
+    outputChannel.appendLine('   Go to Settings > Extensions > Monoid Visualize and set "Gemini Api Key"');
+    outputChannel.appendLine('   Get a key at: https://aistudio.google.com/apikey');
     return;
   }
-  outputChannel.appendLine('   ✓ vscode.lm API exists');
-
-  // Try to list all available models
-  outputChannel.appendLine('');
-  outputChannel.appendLine('2. Listing all available models...');
-  try {
-    const allModels = await vscode.lm.selectChatModels({});
-    if (allModels.length === 0) {
-      outputChannel.appendLine('   ❌ No models available');
-      outputChannel.appendLine('   Make sure GitHub Copilot is installed and you are signed in');
-    } else {
-      outputChannel.appendLine(`   ✓ Found ${allModels.length} model(s):`);
-      for (const model of allModels) {
-        outputChannel.appendLine(`     - ${model.id} (vendor: ${model.vendor}, family: ${model.family})`);
-      }
-    }
-  } catch (error) {
-    outputChannel.appendLine(`   ❌ Error listing models: ${error}`);
-  }
-
-  // Try to select gpt-4o-mini specifically
-  outputChannel.appendLine('');
-  outputChannel.appendLine('3. Checking for GPT-4o-mini model...');
-  try {
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot', family: 'gpt-4o-mini' });
-    if (models.length === 0) {
-      outputChannel.appendLine('   ❌ GPT-4o-mini not available');
-    } else {
-      outputChannel.appendLine(`   ✓ GPT-4o-mini available: ${models[0].id}`);
-    }
-  } catch (error) {
-    outputChannel.appendLine(`   ❌ Error: ${error}`);
-  }
+  outputChannel.appendLine(`   ✓ Gemini API key configured (${apiKey.substring(0, 8)}...)`);
+  outputChannel.appendLine(`   Model: ${model}`);
 
   // Try a simple request
   outputChannel.appendLine('');
-  outputChannel.appendLine('4. Testing a simple LLM request...');
+  outputChannel.appendLine('2. Testing Gemini API request...');
+  
   try {
-    const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-    if (models.length === 0) {
-      outputChannel.appendLine('   ⚠️ Skipping - no models available');
-    } else {
-      const model = models[0];
-      outputChannel.appendLine(`   Using model: ${model.id}`);
-      
-      const messages = [
-        vscode.LanguageModelChatMessage.User('Reply with exactly: "LLM test successful"')
-      ];
-      
-      const response = await model.sendRequest(
-        messages, 
-        {}, 
-        new vscode.CancellationTokenSource().token
-      );
-      
-      let responseText = '';
-      for await (const chunk of response.text) {
-        responseText += chunk;
-      }
-      
-      outputChannel.appendLine(`   ✓ Response received: "${responseText.substring(0, 100)}..."`);
-    }
+    const response = await testGeminiRequest(apiKey, model);
+    outputChannel.appendLine(`   ✓ Response received: "${response.substring(0, 100)}..."`);
   } catch (error) {
     outputChannel.appendLine(`   ❌ Request failed: ${error}`);
-    if (error instanceof vscode.LanguageModelError) {
-      outputChannel.appendLine(`      Error code: ${error.code}`);
-      outputChannel.appendLine(`      Error cause: ${error.cause}`);
-    }
   }
 
   outputChannel.appendLine('');
   outputChannel.appendLine('='.repeat(60));
   outputChannel.appendLine('Test complete');
   outputChannel.appendLine('='.repeat(60));
+}
+
+/**
+ * Test Gemini API with a simple request
+ */
+async function testGeminiRequest(apiKey: string, model: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    
+    const requestBody = JSON.stringify({
+      contents: [{
+        parts: [{
+          text: 'Reply with exactly: "Gemini test successful"'
+        }]
+      }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 50
+      }
+    });
+
+    const urlObj = new URL(url);
+    const options = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(requestBody)
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(data);
+          
+          if (response.error) {
+            reject(new Error(`Gemini API error: ${response.error.message}`));
+            return;
+          }
+
+          if (response.candidates && response.candidates[0]?.content?.parts?.[0]?.text) {
+            resolve(response.candidates[0].content.parts[0].text);
+          } else {
+            reject(new Error('Unexpected response structure from Gemini'));
+          }
+        } catch (e: any) {
+          reject(new Error(`Failed to parse Gemini response: ${e.message}`));
+        }
+      });
+    });
+
+    req.on('error', (e) => {
+      reject(new Error(`Gemini request failed: ${e.message}`));
+    });
+
+    req.write(requestBody);
+    req.end();
+  });
 }

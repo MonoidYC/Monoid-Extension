@@ -96,6 +96,16 @@
         "icon": "$(checklist)"
       },
       {
+        "command": "monoid-visualize.generateTestsFromCodeGraph",
+        "title": "Monoid: Generate Tests from Code Graph",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "monoid-visualize.benchmarkTestGeneration",
+        "title": "Monoid: Benchmark Test Generation Methods",
+        "icon": "$(dashboard)"
+      },
+      {
         "command": "monoid-visualize.openTestPanel",
         "title": "Monoid: Open Test Panel",
         "icon": "$(beaker)"
@@ -124,6 +134,16 @@
         "command": "monoid-visualize.pasteSession",
         "title": "Monoid: Paste Session Token (Dev)",
         "icon": "$(key)"
+      },
+      {
+        "command": "monoid-visualize.generateCodeNode",
+        "title": "Monoid: Generate Code Node from Natural Language",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "monoid-visualize.generateTestFromNaturalLanguage",
+        "title": "Monoid: Generate Test from Natural Language",
+        "icon": "$(beaker)"
       }
     ],
     "viewsContainers": {
@@ -171,24 +191,29 @@
           "group": "navigation@2"
         },
         {
-          "command": "monoid-visualize.runAllTests",
+          "command": "monoid-visualize.generateTestsFromCodeGraph",
           "when": "view == monoid-visualize.playwrightTests",
           "group": "navigation@3"
         },
         {
-          "command": "monoid-visualize.refreshTests",
+          "command": "monoid-visualize.runAllTests",
           "when": "view == monoid-visualize.playwrightTests",
           "group": "navigation@4"
         },
         {
-          "command": "monoid-visualize.openPlaywrightUI",
+          "command": "monoid-visualize.refreshTests",
           "when": "view == monoid-visualize.playwrightTests",
           "group": "navigation@5"
         },
         {
-          "command": "monoid-visualize.openTestPanel",
+          "command": "monoid-visualize.openPlaywrightUI",
           "when": "view == monoid-visualize.playwrightTests",
           "group": "navigation@6"
+        },
+        {
+          "command": "monoid-visualize.openTestPanel",
+          "when": "view == monoid-visualize.playwrightTests",
+          "group": "navigation@7"
         }
       ],
       "view/item/context": [
@@ -289,6 +314,12 @@
           "default": true,
           "description": "Run tests in headed mode (visible browser) by default"
         },
+        "monoid-visualize.testVideoMode": {
+          "type": "string",
+          "enum": ["on", "off", "retain-on-failure", "on-first-retry"],
+          "default": "retain-on-failure",
+          "description": "Playwright video recording mode: 'on' (record all), 'off' (no videos), 'retain-on-failure' (keep videos only for failed tests), 'on-first-retry' (record on retries)"
+        },
         "monoid-visualize.geminiApiKey": {
           "type": "string",
           "default": "",
@@ -307,7 +338,7 @@
         },
         "monoid-visualize.geminiModel": {
           "type": "string",
-          "default": "gemini-2.0-flash",
+          "default": "gemini-3-flash-preview",
           "description": "Gemini model to use (e.g., gemini-2.0-flash, gemini-1.5-pro)"
         }
       }

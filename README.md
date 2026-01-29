@@ -1,71 +1,113 @@
-# monoid-visualize README
+## Monoid Visualize – VS Code extension
 
-This is the README for your extension "monoid-visualize". After writing up a brief description, we recommend including the following sections.
+Monoid Visualize turns your JavaScript/TypeScript project into an interactive code graph backed by Supabase, then opens a Next.js dashboard to explore it.
 
-## Features
+### What it does
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- **Analyze workspace**: walks the current VS Code workspace, extracting functions, classes, components, endpoints, hooks, etc. into `code_nodes` and `code_edges`.
+- **Persist to Supabase**: writes into a shared Postgres schema (`workspaces`, `repos`, `repo_versions`, `code_nodes`, `code_edges`).
+- **Open dashboard webview**: opens the Monoid dashboard for the new `repo_versions.id` in a VS Code webview (`/graph/[versionId]`).
+- **Optional LLM enrichment**: with a Gemini API key + opt-in setting, adds summaries/snippets and extra API relationship edges.
 
-For example if there is an image subfolder under your extension project workspace:
+The primary flow:
 
-\!\[feature X\]\(images/feature-x.png\)
+1. Open any project in VS Code.
+2. Run the command **“Monoid: Visualize All Code”**.
+3. Wait for analysis + Supabase sync.
+4. A webview opens showing the graph in the dashboard.
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+### Extension settings
 
-## Requirements
+All settings live under `monoid-visualize`:
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- **Supabase connection**
+  - `monoid-visualize.supabaseUrl` (string)  
+    Supabase URL. Defaults to a shared **public demo** instance.
+  - `monoid-visualize.supabaseAnonKey` (string)  
+    Supabase anon key. Also defaults to the public demo key.
 
-## Extension Settings
+- **Dashboard URL**
+  - `monoid-visualize.webAppUrl` (string)  
+    URL for the Monoid dashboard. Use your deployed dashboard or `http://localhost:3000` during local development.
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+- **GitHub metadata (optional)**
+  - `monoid-visualize.githubOwner` (string)  
+    Fallback owner if git remote parsing fails.
+  - `monoid-visualize.githubRepo` (string)  
+    Fallback repo name.
+  - `monoid-visualize.githubBranch` (string, default `"main"`)  
+    Branch used when generating GitHub permalinks.
 
-For example:
+- **LLM enrichment (optional, OFF by default)**
+  - `monoid-visualize.geminiApiKey` (string)  
+    Your Google Gemini API key.
+  - `monoid-visualize.geminiModel` (string, default `"gemini-3-flash-preview"`)  
+    Model name to use.
+  - `monoid-visualize.enableLlmEnrichment` (boolean, default `false`)  
+    When `true` and `geminiApiKey` is set:
+    - `geminiSummarizer` generates summaries/snippets for nodes.
+    - `LLMAnalyzer` adds extra API relationship edges.
 
-This extension contributes the following settings:
+No LLM calls are made unless you explicitly set a key **and** enable `enableLlmEnrichment`.
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+### Supabase schema (high level)
 
-## Known Issues
+Graph tables written by the extension:
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- `workspaces` – one row per VS Code workspace.
+- `repos` – one row per repo (linked to `workspaces` + `organizations`).
+- `repo_versions` – one row per visualization run (commit SHA + counts).
+- `code_nodes` – individual code elements (functions, components, endpoints, etc.).
+- `code_edges` – relationships like `calls`, `imports`, `depends_on`, etc.
 
-## Release Notes
+Docs tables used by the dashboard:
 
-Users appreciate release notes as you update your extension.
+- `organizations` – groups repos for the homepage/docs.
+- `org_docs` – markdown docs that can deep-link into graph nodes.
 
-### 1.0.0
+For exact columns and RLS details, see `monoid_graph_schema_2904a02a.plan.md`.
 
-Initial release of ...
+### Demo vs. self-hosted Supabase
 
-### 1.0.1
+The extension ships with a **public demo** Supabase URL/anon key baked in so it works out-of-the-box.
 
-Fixed issue #.
+For serious usage:
 
-### 1.1.0
+1. Create your own Supabase project.
+2. Apply the schema described in `monoid_graph_schema_2904a02a.plan.md` (plus `organizations`/`org_docs`).
+3. Set in VS Code:
+   - `monoid-visualize.supabaseUrl` → your project URL.
+   - `monoid-visualize.supabaseAnonKey` → your anon key.
 
-Added features X, Y, and Z.
+The extension always uses the anon key only (no service-role keys).
 
----
+For the public demo, RLS is disabled on:
 
-## Following extension guidelines
+- `workspaces`
+- `repos`
+- `repo_versions`
+- `code_nodes`
+- `code_edges`
+- `organizations`
+- `org_docs`
 
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
+so that both extension and dashboard can read/write using only the anon key.
 
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
+### Running the full stack locally
 
-## Working with Markdown
+1. Clone both repos:
+   - `monoid-visualize` – this VS Code extension.
+   - `Monoid-dashboard` – the Next.js dashboard.
+2. In `Monoid-dashboard`:
+   - Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` (demo or your own).
+   - Run `npm install` and `npm run dev`.
+3. In `monoid-visualize`:
+   - Run `npm install`.
+   - Press `F5` in VS Code to start an “Extension Development Host”.
+4. In the dev host:
+   - Set `monoid-visualize.webAppUrl` → `http://localhost:3000`.
+   - Optionally point Supabase settings to your own project.
+5. Open any codebase and run **“Monoid: Visualize All Code”**.
 
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
+You should see a new `repo_versions` row, `code_nodes`/`code_edges` filled in, and the dashboard graph view loading inside VS Code.
 
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**

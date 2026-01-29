@@ -60,12 +60,14 @@ export class CodeAnalyzer {
   async analyzeWorkspace(
     workspaceFolder: vscode.WorkspaceFolder,
     progress?: vscode.Progress<{ message?: string; increment?: number }>,
-    githubInfo?: GitHubInfo
+    githubInfo?: GitHubInfo,
+    options?: { enableLlm?: boolean }
   ): Promise<AnalysisResult> {
     this.nodes.clear();
     this.edges = [];
     this.progress = progress;
     this.githubInfo = githubInfo;
+    const enableLlm = options?.enableLlm ?? false;
     this.stats = {
       filesAnalyzed: 0,
       componentsFound: 0,
@@ -119,13 +121,23 @@ export class CodeAnalyzer {
     
     await this.analyzeEdges(workspaceFolder);
 
-    // Phase 3: Analyze frontend → backend relationships using LLM/heuristics
-    const llmAnalyzer = new LLMAnalyzer(this.outputChannel);
-    const apiEdges = await llmAnalyzer.analyzeApiRelationships(
-      Array.from(this.nodes.values()),
-      workspaceFolder
-    );
-    this.edges.push(...apiEdges);
+    // Phase 3: Analyze frontend → backend relationships using LLM/heuristics (optional)
+    if (enableLlm) {
+      const config = vscode.workspace.getConfiguration('monoid-visualize');
+      const apiKey = config.get<string>('geminiApiKey');
+      if (apiKey) {
+        const llmAnalyzer = new LLMAnalyzer(this.outputChannel);
+        const apiEdges = await llmAnalyzer.analyzeApiRelationships(
+          Array.from(this.nodes.values()),
+          workspaceFolder
+        );
+        this.edges.push(...apiEdges);
+      } else {
+        this.log('Phase 3: LLM enrichment enabled, but no geminiApiKey set - skipping');
+      }
+    } else {
+      this.log('Phase 3: LLM enrichment disabled - skipping');
+    }
 
     // Log summary
     this.log('');

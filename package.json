@@ -11,7 +11,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onUri"
+    "onCommand:monoid-visualize.visualizeAllCode",
+    "onCommand:monoid-visualize.openGraphPanel"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -39,111 +40,6 @@
         "command": "monoid-visualize.testLM",
         "title": "Monoid: Test VS Code LM",
         "icon": "$(beaker)"
-      },
-      {
-        "command": "monoid-visualize.generateTest",
-        "title": "Monoid: Generate E2E Test",
-        "icon": "$(add)"
-      },
-      {
-        "command": "monoid-visualize.runAllTests",
-        "title": "Monoid: Run All Tests",
-        "icon": "$(run-all)"
-      },
-      {
-        "command": "monoid-visualize.runTestFile",
-        "title": "Monoid: Run Test File",
-        "icon": "$(play)"
-      },
-      {
-        "command": "monoid-visualize.runTest",
-        "title": "Monoid: Run Test",
-        "icon": "$(play)"
-      },
-      {
-        "command": "monoid-visualize.debugTest",
-        "title": "Monoid: Debug Test",
-        "icon": "$(debug-alt)"
-      },
-      {
-        "command": "monoid-visualize.refreshTests",
-        "title": "Monoid: Refresh Tests",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "monoid-visualize.openTestFile",
-        "title": "Monoid: Open Test File",
-        "icon": "$(go-to-file)"
-      },
-      {
-        "command": "monoid-visualize.openPlaywrightUI",
-        "title": "Monoid: Open Playwright UI",
-        "icon": "$(browser)"
-      },
-      {
-        "command": "monoid-visualize.showTestReport",
-        "title": "Monoid: Show Test Report",
-        "icon": "$(output)"
-      },
-      {
-        "command": "monoid-visualize.regenerateTest",
-        "title": "Monoid: Regenerate Test",
-        "icon": "$(sync)"
-      },
-      {
-        "command": "monoid-visualize.generateAllTests",
-        "title": "Monoid: Generate Tests for Entire App",
-        "icon": "$(checklist)"
-      },
-      {
-        "command": "monoid-visualize.generateTestsFromCodeGraph",
-        "title": "Monoid: Generate Tests from Code Graph",
-        "icon": "$(graph)"
-      },
-      {
-        "command": "monoid-visualize.benchmarkTestGeneration",
-        "title": "Monoid: Benchmark Test Generation Methods",
-        "icon": "$(dashboard)"
-      },
-      {
-        "command": "monoid-visualize.openTestPanel",
-        "title": "Monoid: Open Test Panel",
-        "icon": "$(beaker)"
-      },
-      {
-        "command": "monoid-visualize.deleteAllTests",
-        "title": "Monoid: Delete All Tests",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "monoid-visualize.syncTestsToSupabase",
-        "title": "Monoid: Sync Tests to Supabase",
-        "icon": "$(cloud-upload)"
-      },
-      {
-        "command": "monoid-visualize.signIn",
-        "title": "Monoid: Sign In with GitHub",
-        "icon": "$(sign-in)"
-      },
-      {
-        "command": "monoid-visualize.signOut",
-        "title": "Monoid: Sign Out",
-        "icon": "$(sign-out)"
-      },
-      {
-        "command": "monoid-visualize.pasteSession",
-        "title": "Monoid: Paste Session Token (Dev)",
-        "icon": "$(key)"
-      },
-      {
-        "command": "monoid-visualize.generateCodeNode",
-        "title": "Monoid: Generate Code Node from Natural Language",
-        "icon": "$(sparkle)"
-      },
-      {
-        "command": "monoid-visualize.generateTestFromNaturalLanguage",
-        "title": "Monoid: Generate Test from Natural Language",
-        "icon": "$(beaker)"
       }
     ],
     "viewsContainers": {
@@ -161,10 +57,6 @@
           "type": "webview",
           "id": "monoid-visualize.graphView",
           "name": "Code Graph"
-        },
-        {
-          "id": "monoid-visualize.playwrightTests",
-          "name": "Playwright Tests"
         }
       ]
     },
@@ -179,87 +71,10 @@
           "command": "monoid-visualize.refreshGraph",
           "when": "view == monoid-visualize.graphView",
           "group": "navigation"
-        },
-        {
-          "command": "monoid-visualize.generateTest",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@1"
-        },
-        {
-          "command": "monoid-visualize.generateAllTests",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@2"
-        },
-        {
-          "command": "monoid-visualize.generateTestsFromCodeGraph",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@3"
-        },
-        {
-          "command": "monoid-visualize.runAllTests",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@4"
-        },
-        {
-          "command": "monoid-visualize.refreshTests",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@5"
-        },
-        {
-          "command": "monoid-visualize.openPlaywrightUI",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@6"
-        },
-        {
-          "command": "monoid-visualize.openTestPanel",
-          "when": "view == monoid-visualize.playwrightTests",
-          "group": "navigation@7"
         }
       ],
-      "view/item/context": [
-        {
-          "command": "monoid-visualize.runTestFile",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == testFile",
-          "group": "inline@1"
-        },
-        {
-          "command": "monoid-visualize.runTestFile",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == testFile",
-          "group": "1_run@1"
-        },
-        {
-          "command": "monoid-visualize.debugTest",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == testFile",
-          "group": "1_run@2"
-        },
-        {
-          "command": "monoid-visualize.regenerateTest",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == testFile",
-          "group": "2_manage@1"
-        },
-        {
-          "command": "monoid-visualize.runTest",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == test",
-          "group": "inline@1"
-        },
-        {
-          "command": "monoid-visualize.runTest",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == test",
-          "group": "1_run@1"
-        },
-        {
-          "command": "monoid-visualize.debugTest",
-          "when": "view == monoid-visualize.playwrightTests && viewItem == test",
-          "group": "1_run@2"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "monoid-visualize.generateTest",
-          "when": "resourceExtname == .js || resourceExtname == .jsx || resourceExtname == .ts || resourceExtname == .tsx",
-          "group": "monoid@1"
-        }
-      ]
+      "view/item/context": [],
+      "editor/context": []
     },
     "configuration": {
       "title": "Monoid Visualize",
@@ -299,42 +114,15 @@
           "default": "main",
           "description": "GitHub branch name for generating links"
         },
-        "monoid-visualize.testBaseUrl": {
-          "type": "string",
-          "default": "http://localhost:3000",
-          "description": "Base URL for E2E tests"
-        },
-        "monoid-visualize.testOutputDir": {
-          "type": "string",
-          "default": "e2e",
-          "description": "Directory for generated Playwright tests"
-        },
-        "monoid-visualize.testHeadedMode": {
-          "type": "boolean",
-          "default": true,
-          "description": "Run tests in headed mode (visible browser) by default"
-        },
-        "monoid-visualize.testVideoMode": {
-          "type": "string",
-          "enum": ["on", "off", "retain-on-failure", "on-first-retry"],
-          "default": "retain-on-failure",
-          "description": "Playwright video recording mode: 'on' (record all), 'off' (no videos), 'retain-on-failure' (keep videos only for failed tests), 'on-first-retry' (record on retries)"
-        },
         "monoid-visualize.geminiApiKey": {
           "type": "string",
           "default": "",
           "description": "Google Gemini API key for generating node summaries. Get one at https://aistudio.google.com/apikey"
         },
-        "monoid-visualize.llmProvider": {
-          "type": "string",
-          "enum": ["copilot", "gemini"],
-          "default": "gemini",
-          "description": "LLM provider for test generation"
-        },
-        "monoid-visualize.geminiApiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Google Gemini API key for test generation"
+        "monoid-visualize.enableLlmEnrichment": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable optional LLM enrichment (Gemini snippets/summaries and extra relationship detection). Requires monoid-visualize.geminiApiKey."
         },
         "monoid-visualize.geminiModel": {
           "type": "string",
@@ -359,7 +147,6 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.108.1",

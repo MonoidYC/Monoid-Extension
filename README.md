@@ -2,6 +2,10 @@
 
 Monoid Visualize turns your JavaScript/TypeScript project into an interactive code graph backed by Supabase, then opens a Next.js dashboard to explore it.
 
+### Scope
+
+This extension focuses on **visualization only**: analyzing the codebase, building the graph, and viewing it in the dashboard. Code for **automatic e2e test generation with Playwright** from the hackathon is available in the **`hackathon-archive`** branch but is not part of this mainline; we keep this repo focused on the graph and dashboard experience.
+
 ### What it does
 
 - **Analyze workspace**: walks the current VS Code workspace, extracting functions, classes, components, endpoints, hooks, etc. into `code_nodes` and `code_edges`.
@@ -15,6 +19,10 @@ The primary flow:
 2. Run the command **“Monoid: Visualize All Code”**.
 3. Wait for analysis + Supabase sync.
 4. A webview opens showing the graph in the dashboard.
+
+### Tested frameworks & community
+
+This extension has been tested on **Vue.js** and **React.js** apps. Support for more libraries and frameworks (e.g. Angular, Svelte, other runtimes) is not yet validated—we need **community members to test and contribute fixes** so the analyzer and graph work well across more ecosystems. Issues and PRs are welcome.
 
 ### Extension settings
 

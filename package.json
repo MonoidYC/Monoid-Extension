@@ -12,7 +12,9 @@
   ],
   "activationEvents": [
     "onCommand:monoid-visualize.visualizeAllCode",
-    "onCommand:monoid-visualize.openGraphPanel"
+    "onCommand:monoid-visualize.openGraphPanel",
+    "onView:monoid-visualize.graphView",
+    "onUri"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -20,6 +22,16 @@
       {
         "command": "monoid-visualize.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "monoid-visualize.signIn",
+        "title": "Monoid: Sign In",
+        "icon": "$(account)"
+      },
+      {
+        "command": "monoid-visualize.signOut",
+        "title": "Monoid: Sign Out",
+        "icon": "$(sign-out)"
       },
       {
         "command": "monoid-visualize.visualizeAllCode",
@@ -123,6 +135,11 @@
           "type": "boolean",
           "default": false,
           "description": "Enable optional LLM enrichment (Gemini snippets/summaries and extra relationship detection). Requires monoid-visualize.geminiApiKey."
+        },
+        "monoid-visualize.authRedirectUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Optional override for the hosted auth callback URL (defaults to <webAppUrl>/auth/callback)."
         },
         "monoid-visualize.geminiModel": {
           "type": "string",

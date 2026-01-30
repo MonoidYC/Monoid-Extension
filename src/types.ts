@@ -96,6 +96,9 @@ export interface GitHubInfo {
   branch: string;
 }
 
+// Cluster for frontend/backend grouping (optional; can be set by user in UI)
+export type ClusterType = 'frontend' | 'backend' | 'shared' | 'unknown';
+
 // For local analysis before saving to Supabase
 export interface LocalNode {
   stable_id: string;
@@ -113,6 +116,8 @@ export interface LocalNode {
   summary?: string;
   metadata?: Record<string, unknown>;
   github_link?: string;
+  /** User-overridable cluster; persisted in .monoid/graph.json */
+  cluster?: ClusterType;
 }
 
 export interface LocalEdge {

@@ -1,0 +1,23 @@
+{
+  "name": "@monoid/analyzer-core",
+  "version": "0.1.0",
+  "description": "Monoid code analyzer - extracts nodes and edges from a codebase (no VS Code dependency)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "fast-glob": "^3.3.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/node": "22.x"
+  },
+  "license": "MIT"
+}
